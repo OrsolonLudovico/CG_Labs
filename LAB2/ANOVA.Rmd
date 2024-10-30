@@ -1,0 +1,136 @@
+---
+title: 'Introduction to ANOVA'
+author: "Giulia Cesaro"
+output:
+html_document:
+df_print: paged
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## R Markdown
+
+This is an R Markdown document.
+Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents.
+For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+## Dataset                        #already in R
+
+Here, we'll use the built-in R data set named ToothGrowth.
+It contains data from a study evaluating the effect of vitamin C on tooth growth in Guinea pigs.
+The experiment has been performed on 60 pigs, where each animal received one of three dose levels of vitamin C (0.5, 1, and 2 mg/day) by one of two delivery methods, (orange juice or ascorbic acid (a form of vitamin C and coded as VC).
+Tooth length was measured and a sample of the data is shown below.
+
+```{r}
+# Example dataset
+my_data <- ToothGrowth                            #you can cick on the variable to open it
+print(dim(my_data)) # print dimension of the data
+```
+
+To have an idea of what the data look like:
+
+```{r paged.print=FALSE}
+# print the data
+head(my_data)                      #The first part
+```
+
+```{r}
+# Check the structure
+str(my_data)
+```
+
+```{r}
+# Check the structure
+my_data$supp                             #levels are the type of data, useful if the number is limited
+```
+
+We'll convert dose as a factor variable (i.e., grouping variable) as follow. #It has only two possible values
+
+```{r}
+# Convert dose as a factor and recode the levels as "D0.5", "D1", "D2"
+my_data$dose <- factor(my_data$dose, 
+                  levels = c(0.5, 1, 2),
+                  labels = c("D0.5", "D1", "D2"))
+head(my_data)
+```
+
+## One-way Analysis of Variance (ANOVA)
+
+In one-way ANOVA, the data is organized into several groups (or levels) based on one single grouping variable (also called factor variable).
+Null hypothesis: the means of the different groups are the same
+
+?? We want to know if there is any significant difference between the average tooth length in the 3 dose levels.
+
+The R function aov() can be used to answer to this question.
+
+```{r}
+# Compute the analysis of variance             #one way anova has 2 or more levels
+res.aov <- aov(len ~ dose, data = my_data)     #len response varible, dose the independent variable
+# Summary of the analysis                      #~ specifies a statistic function where the left is the "target" (dependent) and the right one is the independent variable ("predictors")
+summary(res.aov)
+```
+
+The output includes the columns F value and Pr(\>F) corresponding to the p-value of the test.
+As the p-value is less than the significance level 0.05, we can conclude that there is difference among at least two of the groups
+
+Compute summary statistics (i.e. mean) by groups
+```{r}
+# report the means and the number of subjects/cell
+print(model.tables(res.aov,"means"),digits=3) 
+```
+
+Visualize your data
+
+```{r}
+boxplot(len ~ dose, data = my_data) 
+```
+
+In one-way ANOVA test, a significant p-value indicates that some of the group means are different, but we don't know which pairs of groups are different.
+
+It's possible to perform multiple pairwise-comparison, to determine if the mean difference between specific pairs of group are statistically significant using Tukey multiple pairwise-comparisons.
+
+The function TukeyHD() takes the fitted ANOVA as an argument.
+
+```{r}
+# Tukey Significant Differences : why of the average is the different one?
+TukeyHSD(res.aov) 
+```
+
+The output includes the columns diff value (i.e. difference between means of the two groups) and p adj corresponding to the p-value of the test after adjustment for the multiple comparisons.
+
+Considering a significance level alpha = 0.05, all pairwise comparisons are significant.
+
+## Two-way Analysis of Variance (ANOVA)
+
+The standard 2-way ANOVA just adds another Independent Variable to the model.
+It is used to evaluate simultaneously the effect of two grouping variables.
+
+Null Hypothesis: 1) There is no difference in the means of factor A; 2) There is no difference in means of factor B; 3)There is no interaction between factors A and B
+
+??? We want to know if tooth length depends on supp and dose.
+
+```{r}
+# Analysis of Variance: tooth length depends on supp, dose and their combined effect
+res.aov2  = aov(len ~ supp + dose + supp*dose, data= my_data) 
+# Summary of the analysis
+summary(res.aov2)                                    
+```
+
+From the ANOVA results, you can conclude that ...
+
+```{r}
+print(model.tables(res.aov2,"means"))
+boxplot(len ~ supp + dose + supp*dose, data=my_data) 
+```
+
+In ANOVA test, a significant p-value indicates that some of the group means are different, but we don't know which pairs of groups are different...
+
+```{r}
+TukeyHSD(res.aov2)
+```

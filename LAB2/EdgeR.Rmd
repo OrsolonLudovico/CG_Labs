@@ -1,0 +1,313 @@
+---
+title: 'Introduction to DE analysis of RNA-seq data with edgeR'
+author: "Giulia Cesaro"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+
+## Load data
+
+```{r}
+#load data and select columns
+DATA <- read.table("GSE147507_RawReadCounts_Human.tsv",sep="\t",row.names=1,header=TRUE)
+head(DATA)
+```
+
+
+```{r}
+indSARS2 <- grep("SARS.CoV.2",colnames(DATA)) # get samples related to SARS2
+indCTRL <- grep("Mock",colnames(DATA)) # get samples related to Mock (control)
+l1 <- length(indSARS2) # compute the number of SARS2 samples
+l2 <- length(indCTRL) # compute the number of control samples
+x <- DATA[,c(indSARS2,indCTRL)] # subset the data to contain only SARS2 and control samples
+colnames(x)
+```
+
+We create an edgeR object, with the counts
+```{r}
+library(edgeR)
+# preliminary step: create the DGE object
+y <- DGEList(counts = x)    # y is an object of type DGE
+```
+
+We first compute the SCALING FACTORS
+```{r}
+y <- calcNormFactors(y)   # This calculates the SF using the TMM normalization !!!
+y$samples         # for each sample: group labels, library sizes and normalization factors
+```
+
+
+Load metadata
+```{r}
+#Upload metadata
+targets <- read.table(file = "design.txt", header = T) 
+# NOTE: rows (i.e. samples) in design.txt should be in the same order of columns (i.e. samples) in x
+
+unique(targets$Cell)
+unique(targets$Treat)
+```
+
+Generalized linear models are an extension of classical linear model to non-normally distributed data (such as poisson or negative binomial).
+
+
+
+
+# For this example, let's consider only the treatment, i.e. ignore the different cell types
+
+```{r}
+Group <- factor(targets$Treat)              #convert the coloumns in a factor with two levels
+print(Group)
+```
+
+
+To use the GLM we need to define the variables to be considered in the model, which we call a design.
+(design "dummy variables")
+```{r}
+# DESIGN matrix (not always straightforward in edgeR...)
+design <- model.matrix(~ Group) # the results is similar to a table containing the dummy variables
+rownames(design) <- colnames(x)  
+print(design)
+```
+Here, we have a single variable (experimental condition) with two values (i.e. Mock and SARSCoV2). 
+!! If multiple factors, interpreting the meaning of the intercept gets complex, as it is a mixture of several factors !!
+
+```{r}
+# DESIGN matrix (not always straightforward in edgeR...)
+design <- model.matrix(~ 0 + Group) 
+rownames(design) <- colnames(x)  
+print(design)
+```
+Here, the 0+ in the model formula is an instruction not to include an intercept column and instead to include a column for each group. 
+!! THE MEANING OF THE COLUMNS WOULD CHANGE !!
+
+
+The next step in edgeR is to estimate the dispersion of the gene expression. Given a DGEList object y and a design matrix, we estimate the dispersions using the following commands.
+```{r}
+# fit values of phi (we need this step to fit our GLM model)
+y <- estimateGLMCommonDisp(y,design, verbose=TRUE) #phi common to the entire dataset
+y <- estimateGLMTrendedDisp(y,design) #phi depends on mu
+y <- estimateGLMTagwiseDisp(y,design) #phi is gene specific
+```
+
+Next, edgeR fits the GLM model for each gene
+```{r}
+fit <- glmFit(y, design) # fit the model (that accounts for raw NB data and scaling factors and seq. depth) 
+summary(fit)
+```
+
+Define the comparison. Let's compare “SARSCoV2” to “Mock” using the contrast argument of the glmLRT function
+```{r}
+# decide which factors/conditions I want to test
+comp <- makeContrasts(Treatment = GroupSARSCoV2 - GroupMock, levels=design) # "GroupSARSCoV2" and "GroupMock" are the name of the 2 column of the design matrix created by model.matrix()
+# do the log ratio test (LRT)
+RES <- glmLRT(fit, contrast = comp[,"Treatment"])     #the contrast we want to compare
+# The first column of RES reports the log_Fold_Change, i.e.: 
+# log2(Normalized_data_average_GroupSARSCoV2 / Normalized_data_average_GroupMock)
+RES$table[1:5,]
+```
+
+
+Extracts the most differentially expressed genes ranked by p-value (by default) and adjust the pvalue for multiple testing.
+```{r}
+# get the top "n" significant genes (i.e. TOP n significant differentially expressed genes)
+out <- topTags(RES, n = "Inf")$table        #ordered by p-value
+out[1:5,]
+```
+
+how many genes are DE? #differentially expressed
+```{r}
+# how many genes are DE?
+indSELedgeR <- which(out$FDR<0.05)
+print(length(indSELedgeR))
+```
+
+
+## Second analysis: a more realistic design accounting also for cell type
+we are considering mode than one experimental factor
+
+We now consider experiments with more than one experimental factor. There are many ways to setup a design matrix...
+A simple, multi-purpose approach is to combine all the experimental factors into one combined factor: each experimental condition for each cell type is a group.
+```{r}
+#mode than one experimental factor
+Group <- factor(paste(targets$Cell,targets$Treat,sep="."))
+print(Group)
+```
+1 factor, 41 different values
+
+We can use the same approach as in the previous section with one factor:
+```{r}
+design <- model.matrix(~0+Group) 
+rownames(design)<-colnames(x)  
+print(design)
+```
+
+8 different coefficients
+
+As done before: create the DGE, compute the norm. factor, fit the values of phi and fit the final GLM model
+```{r}
+y <- DGEList(counts=x)    # y is an object of type DGE
+y <- calcNormFactors(y)   # This calculates the SF using the TMM normalization !!!
+y <- estimateGLMCommonDisp(y,design, verbose=TRUE) #phi common to the entire dataset
+y <- estimateGLMTrendedDisp(y,design) #phi depends on mu
+y <- estimateGLMTagwiseDisp(y,design) #phi is gene specific
+fit <- glmFit(y,design) #finally the model fit. 
+summary(fit)
+```
+
+Then we can make any comparisons we wish. For example, we might wish to make the following CONTRAST: effect of experimental condition in each cell type. 
+We can make different pairwise comparisons between groups.
+```{r}
+comp <- makeContrasts(
+  NHBE = GroupNHBE.SARSCoV2 - GroupNHBE.Mock,                  #Im making contrasts (4)
+  A549 = GroupA549.SARSCoV2 - GroupA549.Mock,                  #I'm using the name of teh coloumns in teh matrix
+  A549ACE2 = GroupA549ACE2.SARSCoV2 - GroupA549ACE2.Mock, 
+  Calu3 = GroupCalu3.SARSCoV2 - GroupCalu3.Mock,
+  levels = design)
+
+# To find genes DE between disease and control in NHBE cell type 
+RES <- glmLRT(fit,contrast = comp[,c("NHBE")])                #perform the conrast forthe first cell type
+out <- topTags(RES, n = "Inf")$table
+out[1:5,]                                                  #genes that are differentially expressed for each cell type
+```
+
+It might be of interest to find genes that are DE between any of the cell types, without specifying before-hand which groups might be different. This is analogous to a one-way ANOVA test: find genes that differ between experimental condition in any cell type. 
+Technically, this procedure tests whether either of the contrasts are non-zero. Since at least one of these must be non-zero when differences exist, the test will detect any differences
+
+```{r}
+# we can test for the effect of viral infection accounting for variability due to different cell type
+comp <- makeContrasts(
+  NHBE = GroupNHBE.SARSCoV2-GroupNHBE.Mock, 
+  A549 = GroupA549.SARSCoV2-GroupA549.Mock, 
+  A549ACE2 = GroupA549ACE2.SARSCoV2-GroupA549ACE2.Mock, 
+  Calu3 = GroupCalu3.SARSCoV2-GroupCalu3.Mock,
+  levels = design)
+
+RES <- glmLRT(fit,contrast=comp[,c("NHBE","A549","A549ACE2","Calu3")])
+out <- topTags(RES, n = "Inf")$table
+out[1:5,]
+```
+
+```{r}
+# how many DE genes?                     #differentely expressed
+indSELedgeR <- which(out$FDR<0.05)
+length(indSELedgeR)
+```
+More DE genes compared to the previous test... in the previous test all the cell types where put together, so increasing the overall variance...so we were less powerful. Now that we consider the different cell types in the DE analysis, we have more power (and more DE genes)
+
+
+```{r}
+# what genes?
+namesSELedgeR <- row.names(DATA)[indSELedgeR]
+print(namesSELedgeR)
+```
+
+# We can also test for specific effects...
+
+The glm approach allows an infinite variety of contrasts to be tested between the groups. Which specific contrasts should we test?
+This answer is that we should form and test those contrasts that correspond to the scientific questions that we want to answer.
+
+Check the effect of ACE2 on cell type A549, i.e. cell type A549ACE2 vs A549, within virus sample
+```{r}
+# example: check the effect of ACE2 on cell type A549 in virus sample, i.e. cell type A549ACE2 vs A549, within virus sample
+comp <- makeContrasts(ACE2effect = GroupA549.SARSCoV2 - GroupA549ACE2.SARSCoV2 ,levels = design)
+RES <- glmLRT(fit,contrast=comp[,c("ACE2effect")])
+out <- topTags(RES, n = "Inf")$table
+out[1:5,]
+```
+
+```{r}
+indSELedgeR<-which(out$FDR<0.05)
+length(indSELedgeR)
+```
+
+# Even more... 
+We want to see if there is any difference in gene expression between SARS2 and ctrl in cell type A549ACE2, with respect to the difference in gene expression between SARS2 and ctrl in the cell type A459...
+
+```{r}
+comp <- makeContrasts(ACE2effect = (GroupA549.SARSCoV2 - GroupA549ACE2.Mock) - (GroupA549.SARSCoV2 - GroupA549.Mock) ,levels = design)
+RES <- glmLRT(fit,contrast=comp[,c("ACE2effect")])
+out <- topTags(RES, n = "Inf")$table
+out[1:5,]
+
+```
+
+
+
+
+# ENRICHMENT ANALYSIS
+Enrichment analyses are a family of bioinformatics methods that aim to facilitate the biological interpretation of many bioinformatics results. 
+The goal of gene sets methods is to identify enriched or over-represented gene sets among a list of genes. These gene sets are groups of functionally related genes, according to current knowledge, e.g. GENE ONTOLOGY TERMS.
+
+```{r}
+#Identify the DE genes between SARSCoV2 and control in CALU3
+comp <- makeContrasts(
+  Calu3 = GroupCalu3.SARSCoV2-GroupCalu3.Mock,
+  levels = design)
+RES <- glmLRT(fit,contrast = comp[,c("Calu3")])
+out <- topTags(RES, n = "Inf")$table
+indSELedgeR <- which(out$FDR<0.05)
+namesSELedgeR <- row.names(DATA)[indSELedgeR]
+```
+
+
+The gene ontology (GO) enrichment analysis is the common downstream procedure to interpret the differential expression results in a biological context. Given a set of genes that are up- or down-regulated under a certain contrast of interest, a GO enrichment analysis will find which GO terms are over-represented (= enriched) in a gene list. These approaches are known as Over-Representation Analysis (ORA).
+
+The clusterProfiler package implements enrichGO() for gene ontology over-representation test.
+```{r}
+library(clusterProfiler)
+library(org.Hs.eg.db)
+
+
+ego <- enrichGO(gene = namesSELedgeR, # vector of DE genes
+                OrgDb  = org.Hs.eg.db,
+                ont  = "BP",
+                pAdjustMethod = "BH",
+                keyType = "SYMBOL",
+                pvalueCutoff  = 0.05)
+head(ego)
+```
+
+Visualize results
+```{r}
+barplot(ego, showCategory=20) 
+```
+Overrepresentation Analysis Methods depend a lot in the criteria used to select differentially-expressed genes.
+
+The Gene Set Enrichment Analysis (GSEA) avoid the use of threshold. All genes can be used in GSEA. The difference is that the input is not a list of genes, but a ranked list genes by some statistics.
+Then, GSEA basically checks how the genes for a specific gene set (GO) are distributed in your list: the genes annotate with a specific GO term are randomly distributed throughout the ranked gene list or primarily found at the top or bottom.
+
+A common way of ranking genes is by level of differential expression. The p-values tell us how significant the change is. The log2fold changes tell us the direction and strength of the change, basically if they are upregulated or downregulated.
+```{r}
+gene_list <- out$logFC
+names(gene_list) <- row.names(out)
+
+# sort the list in decreasing order (required for clusterProfiler)
+gene_list = sort(gene_list, decreasing = TRUE)
+```
+
+The clusterProfiler package provides the gseGO() function for gene set enrichment analysis using gene ontology.
+```{r}
+ego3 <- gseGO(geneList = gene_list, # order ranked vector
+              OrgDb  = org.Hs.eg.db,
+              keyType = "SYMBOL",
+              ont  = "BP",
+              pvalueCutoff = 0.05)
+head(ego3@result)
+```
+Visualize analyzing result of GSEA
+```{r}
+gseaplot(ego3, geneSetID = 4, by = "runningScore", title = ego3$Description[4])
+```
+
+
+
