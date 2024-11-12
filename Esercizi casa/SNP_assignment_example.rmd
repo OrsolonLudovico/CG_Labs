@@ -1,0 +1,205 @@
+
+---
+title: "Test on SNP tests"
+output: html_notebook
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+
+## Exercise 1
+## Association test on a single SNP
+
+
+```{r}
+# COMPLETE THE FOLLOWING FUNCTION AssocTestSNP()
+
+# AssocTestSNP() gives as output a vector of length 5 with (THIS ORDER IS MANDATORY)
+# the MAF (calculated only on the control subjects)
+# the p value of the HWE test (calculated only on the control subjects)
+# the p value of the SNP-Phenotype association test calculated using the general model of association
+# the p value of the SNP-Phenotype association test calculated using the recessive model of association for the minor allele
+# the p value of the SNP-Phenotype association test calculated using the dominant model of association for the minor allele
+
+# DO NOT round the numbers!
+# DO NOT use the chisq.test() function. 
+# You can used the pchisq() functions.
+AssocTestSNP <- function(AA,Aa,aa,AAd,Aad,aad) {
+  out <- numeric(length(5))
+  #aan, Aan and AAn are the non-deseased ones
+  aan <- aa - aad
+  Aan <- Aa - Aad
+  AAn <- AA - AAd
+  if(aan <= 0){aan = 1}
+  if(Aan <= 0){Aan = 1}
+  if(AAn <= 0){AAn = 1}
+  if(aad <= 0){aad = 1}
+  if(Aad <= 0){Aad = 1}
+  if(AAd <= 0){AAd = 1}
+  
+  n <- AA + Aa + aa
+  exp_aan <- (aa/n) * (aan + Aan + AAn)
+  exp_aad <- (aa/n) * (aad + Aad + AAd)
+  exp_AAn <- (AA/n) * (aan + Aan + AAn)
+  exp_AAd <- (AA/n) * (aad + Aad + AAd)
+  exp_Aan <- (Aa/n) * (aan + Aan + AAn)
+  exp_Aad <- (Aa/n) * (aad + Aad + AAd)
+  
+  
+  #print(paste(AAd,Aad,aad,AAn,Aan,aan,exp_AAd,exp_Aad,exp_aad,exp_AAn,exp_Aan,exp_aan))
+  
+  #calculate MAF
+  MAF <- (Aan + aan*2)/(aan*2 + Aan*2 + AAn*2)
+  out[1] <- MAF
+  #print(paste("MAF: ", MAF))
+  #Hwe test on controls
+  HWE_exp_aa <- 9 * MAF^2
+  HWE_exp_Aa <- 2 * MAF * (1 - MAF) * 9
+  HWE_exp_AA <- 9 * (1-MAF)^2
+  
+  chi_2 <- (((aan - HWE_exp_aa)^2)/HWE_exp_aa) + (((Aan - HWE_exp_Aa)^2)/HWE_exp_Aa) + (((AAn - HWE_exp_AA)^2)/HWE_exp_AA)
+  #print(paste("Chi2: ", chi_2 ,"\n"))
+  p_value_HWE_controls <- pchisq(chi_2, 1, lower.tail = FALSE)
+  out[2] <- p_value_HWE_controls
+  
+  #SNP phenotype association test on general model, let's try to use vectors now
+  obs <- c(AAd,Aad,aad,AAn,Aan,aan)
+  exp <- c(exp_AAd,exp_Aad, exp_aad, exp_AAn, exp_Aan, exp_aan)
+  temp <- (obs - exp) ^2
+  temp <- (temp / exp)
+  #print(paste("General chi 2: ", sum(temp)))
+  Chi_SNPass_General <- pchisq(sum(temp), 2, lower.tail = FALSE)
+  out[3] <- Chi_SNPass_General
+  
+  #SNP recessive AA + Aa
+  obs_rec <- c(AAd + Aad,aad, AAn + Aan , aan)
+  exp_rec <- c(exp_AAd + exp_Aad, exp_aad, exp_AAn + exp_Aan, exp_aan)
+  temp_rec <- (obs_rec - exp_rec) ^2
+  temp_rec <- (temp_rec / exp_rec)
+  #print(paste("Rec chi 2: ", sum(temp_rec)))
+  Chi_SNPass_Rec <- pchisq(sum(temp_rec), 1, lower.tail = FALSE)
+  out[4] <- Chi_SNPass_Rec
+  
+  #SNP dominant model aa + Aa
+  obs_dom <- c(AAd, Aad + aad, AAn, Aan + aan)
+  exp_dom <- c(exp_AAd,exp_Aad + exp_aad, exp_AAn, exp_Aan + exp_aan)
+  temp_dom <- (obs_dom - exp_dom) ^2
+  temp_dom <- (temp_dom / exp_dom)
+  #print(paste("Dom chi 2: ", sum(temp_dom)))
+  Chi_SNPass_Dom <- pchisq(sum(temp_dom), 1, lower.tail = FALSE)
+  out[5] <- Chi_SNPass_Dom
+  
+  return(out)
+}
+```
+
+
+```{r}
+# Try your function here
+res <- AssocTestSNP(AA=400,Aa=170,aa=30,AAd=450,Aad=200,aad=50)
+cat("\n", res,"\n")
+
+res <- AssocTestSNP(AA=400,Aa=170,aa=30,AAd=450,Aad=200,aad=70)
+cat("\n",res,"\n")
+
+res <- AssocTestSNP(AA=400,Aa=170,aa=30,AAd=400,Aad=170,aad=30)
+cat("\n",res,"\n")
+
+```
+
+
+## Exercise 2
+## Association test on a dataset
+
+
+```{r}
+# COMPLETE THE FOLLOWING FUNCTION AssocTestDataset()
+# AssocTestDataset() takes as input a named matrix (i.e. matrix having rownames and colnames) having the SNP on rows, and having on columns: 
+# AA : the number of control subjects with genotype AA
+# Aa : the number of control subjects with genotype Aa
+# aa : the number of control subjects with genotype aa
+# AAd : the number of case (diseased) subjects with genotype AA
+# Aad : the number of case (diseased) subjects with genotype Aa
+# aad : the number of case (diseased) subjects with genotype aa
+
+# AssocTestDataset() gives as output a matrix having the SNP on the rows and the columns contains (THIS ORDER IS MANDATORY)
+# column 1 (name "MAF"): the MAF (calculated only on the control subjects)
+# column 2 (name "pvalHWE"): the p value of the HWE test (calculated only on the control subjects)
+# column 3 (name "pval_general"): the p value of the SNP-Phenotype association test calculated using the general model of association
+# column 4 (name "pval_recessive"): the p value of the SNP-Phenotype association test calculated using the recessive model of association for the minor allele
+# column 5 (name "pval_dominant"): the p value of the SNP-Phenotype association test calculated using the dominant model of association for the minor allele
+# column 6 (name "pval"): the global p value calculated as the minimum among of the p values of the general model, dominant model and recessive model for the given SNP
+# column 7 (name "qval"): the q value computed using the Benjamini-Hochberg procedure from the p value availalble in column 6
+
+# DO NOT round the numbers!
+# For each SNP, use the previously developed function AssocTestSNP() to compute the values in columns 1-5
+# DO NOT write anything outside the curly brackets
+AssocTestDataset <- function(data){
+  m <- matrix( 0 ,nrow = nrow(data), ncol = 7)
+  rownames(m) <- rownames(data)
+  print(m)
+  #point 1 to 5
+  for(i in 1:nrow(data)){
+    m[i,1:5] <- AssocTestSNP(
+    AA = data[i, "AA"], 
+    Aa = data[i, "Aa"], 
+    aa = data[i, "aa"], 
+    AAd = data[i, "AAd"], 
+    Aad = data[i, "Aad"], 
+    aad = data[i, "aad"])
+  }
+  #point 6
+  for(i in 1:nrow(m)){
+    m[i,6] <- min(m[i,3:5])
+  }
+  #point 7
+  col6 <- m[,6]
+  p_val <- sort(col6,decreasing = FALSE)
+  original_pos <- order(col6)
+  q_val <- c()
+  for(i in 1:length(p_val)){
+    q_val[i] = (p_val[i] * sum(m[i,]))/i
+  }
+  q_val <- q_val[original_pos]
+  
+  m[,7] <- q_val
+  
+  print(m)
+  return(m)
+}
+
+```
+
+
+```{r}
+# Try your function here
+
+# consider this example dataset containing 7 SNPs (rows)
+dataset <- matrix(nrow = 7, ncol = 6, byrow = TRUE, 
+                  dimnames = list(c("SNP1", "SNP2", "SNP3", "SNP4", "SNP5", "SNP6", "SNP7"), 
+                                  c("AA", "Aa", "aa", "AAd", "Aad", "aad")),
+                  data =
+                    c (400, 170, 30, 350, 100, 50,
+                       325, 150, 25, 300, 150, 50,
+                       475,  20,  5, 400,  75, 25,
+                       275, 175, 50, 350,  80, 70,
+                       325, 150, 25, 325, 150, 25,
+                       475,  20,  5, 470,  25,  5,
+                       300, 150, 50, 325, 125, 50)
+                  )
+
+dataset
+```
+
+```{r}
+# run your function on this dataset
+AssocTestDataset (dataset)
+```
+

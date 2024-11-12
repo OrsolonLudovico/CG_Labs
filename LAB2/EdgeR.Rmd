@@ -25,36 +25,41 @@ head(DATA)
 
 
 ```{r}
-indSARS2 <- grep("SARS.CoV.2",colnames(DATA)) # get samples related to SARS2
+indSARS2 <- grep("SARS.CoV.2",colnames(DATA)) # get samples related to SARS2   #Grep returnthe indexes that are sars.cov.2
 indCTRL <- grep("Mock",colnames(DATA)) # get samples related to Mock (control)
+
 l1 <- length(indSARS2) # compute the number of SARS2 samples
 l2 <- length(indCTRL) # compute the number of control samples
 x <- DATA[,c(indSARS2,indCTRL)] # subset the data to contain only SARS2 and control samples
-colnames(x)
+#I THINK that x contains samples in the coloumns
+colnames(x)                        #Gives the names of the selected coloumns
 ```
 
 We create an edgeR object, with the counts
 ```{r}
 library(edgeR)
 # preliminary step: create the DGE object
-y <- DGEList(counts = x)    # y is an object of type DGE
+y <- DGEList(counts = x)    # y is an object of type DGE, Remember that x contained only the coloumns of controls and the ones relating to sarscov2
 ```
 
 We first compute the SCALING FACTORS
 ```{r}
 y <- calcNormFactors(y)   # This calculates the SF using the TMM normalization !!!
-y$samples         # for each sample: group labels, library sizes and normalization factors
+y$samples                 # for each sample: group labels, library sizes and normalization factors
 ```
 
 
 Load metadata
 ```{r}
 #Upload metadata
-targets <- read.table(file = "design.txt", header = T) 
+targets <- read.table(file = "design.txt", header = T) #Just reads the file in the folder, considers the first row as a header
 # NOTE: rows (i.e. samples) in design.txt should be in the same order of columns (i.e. samples) in x
 
-unique(targets$Cell)
-unique(targets$Treat)
+unique(targets$Cell) #Picks the unique names in the first column
+unique(targets$Treat) #Same thing for the second row (Cell and Treat are the names of the columns)
+
+
+#The first row in the output is the unique of the first column, the second the unique names of the second column
 ```
 
 Generalized linear models are an extension of classical linear model to non-normally distributed data (such as poisson or negative binomial).
@@ -62,20 +67,26 @@ Generalized linear models are an extension of classical linear model to non-norm
 
 
 
-# For this example, let's consider only the treatment, i.e. ignore the different cell types
+# For this example, let's consider only the treatment, i.e. ignore the different cell types (only sars and mock)
 
 ```{r}
-Group <- factor(targets$Treat)              #convert the coloumns in a factor with two levels
+Group <- factor(targets$Treat)      #convert the columns in a factor with two levels, the factor is called group and has values equal to the possible values of the Treat column, so 2 in this case
 print(Group)
+
+#Note that the output is just one row but Rmarkdown break it to fit the screen
 ```
 
 
-To use the GLM we need to define the variables to be considered in the model, which we call a design.
+To use the Generalized linear model we need to define the variables to be considered in the model, which we call a design.
 (design "dummy variables")
 ```{r}
 # DESIGN matrix (not always straightforward in edgeR...)
 design <- model.matrix(~ Group) # the results is similar to a table containing the dummy variables
-rownames(design) <- colnames(x)  
+#The intecept coloumn is constant for each factor and the second coloumn indictes that the sample is in group SARSCoV2 with 1 and in the other one with 0
+
+#In general intercept rapresents the mean of the group 1 while Group2 coloumn rapresents the diffrence between group 2 and group 1 (group 2 - intercept)
+
+rownames(design) <- colnames(x)  #Gives names to the rows
 print(design)
 ```
 Here, we have a single variable (experimental condition) with two values (i.e. Mock and SARSCoV2). 
@@ -83,7 +94,10 @@ Here, we have a single variable (experimental condition) with two values (i.e. M
 
 ```{r}
 # DESIGN matrix (not always straightforward in edgeR...)
-design <- model.matrix(~ 0 + Group) 
+design <- model.matrix(~ 0 + Group) # 0 avoid the inclusion of the intercept coloumn, and instead include a coloumn for each group
+#It creates a design matrix based on the factor Group. So there will be 1 column for the names and one column for each level of Group.
+#1 if it belogs to that group
+
 rownames(design) <- colnames(x)  
 print(design)
 ```
@@ -93,10 +107,10 @@ Here, the 0+ in the model formula is an instruction not to include an intercept 
 
 The next step in edgeR is to estimate the dispersion of the gene expression. Given a DGEList object y and a design matrix, we estimate the dispersions using the following commands.
 ```{r}
-# fit values of phi (we need this step to fit our GLM model)
+# fit values of phi (we need this step to fit our GLM (general linear model))
 y <- estimateGLMCommonDisp(y,design, verbose=TRUE) #phi common to the entire dataset
-y <- estimateGLMTrendedDisp(y,design) #phi depends on mu
-y <- estimateGLMTagwiseDisp(y,design) #phi is gene specific
+y <- estimateGLMTrendedDisp(y,design)              #phi depends on mu
+y <- estimateGLMTagwiseDisp(y,design)              #phi is gene specific
 ```
 
 Next, edgeR fits the GLM model for each gene
@@ -108,7 +122,7 @@ summary(fit)
 Define the comparison. Let's compare “SARSCoV2” to “Mock” using the contrast argument of the glmLRT function
 ```{r}
 # decide which factors/conditions I want to test
-comp <- makeContrasts(Treatment = GroupSARSCoV2 - GroupMock, levels=design) # "GroupSARSCoV2" and "GroupMock" are the name of the 2 column of the design matrix created by model.matrix()
+comp <- makeContrasts(Treatment = GroupSARSCoV2 - GroupMock, levels=design) # "GroupSARSCoV2" and "GroupMock" are the name of the 2 column of the design matrix created by model.matrix(); "-" indicates I wanna find the difference between the two groups
 # do the log ratio test (LRT)
 RES <- glmLRT(fit, contrast = comp[,"Treatment"])     #the contrast we want to compare
 # The first column of RES reports the log_Fold_Change, i.e.: 
@@ -127,8 +141,8 @@ out[1:5,]
 how many genes are DE? #differentially expressed
 ```{r}
 # how many genes are DE?
-indSELedgeR <- which(out$FDR<0.05)
-print(length(indSELedgeR))
+indSELedgeR <- which(out$FDR<0.05) #The ones in out with a false discovery rate less than 0.05 (gives indexes of rows)
+print(length(indSELedgeR))         #Number of the differentially expressed genes (rows)
 ```
 
 
@@ -139,14 +153,15 @@ We now consider experiments with more than one experimental factor. There are ma
 A simple, multi-purpose approach is to combine all the experimental factors into one combined factor: each experimental condition for each cell type is a group.
 ```{r}
 #mode than one experimental factor
-Group <- factor(paste(targets$Cell,targets$Treat,sep="."))
+Group <- factor(paste(targets$Cell,targets$Treat,sep=".")) # Concatenates into a string separated by dots
+#if Cell has values a and b and Treat has values c and d the possible values of Group this time are a.c, a.d, b.c, b.d
 print(Group)
 ```
 1 factor, 41 different values
 
 We can use the same approach as in the previous section with one factor:
 ```{r}
-design <- model.matrix(~0+Group) 
+design <- model.matrix(~0+Group)  # show two coloumns and not intercept
 rownames(design)<-colnames(x)  
 print(design)
 ```

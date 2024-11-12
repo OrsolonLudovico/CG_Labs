@@ -54,18 +54,18 @@ We'll convert dose as a factor variable (i.e., grouping variable) as follow. #It
 
 ```{r}
 # Convert dose as a factor and recode the levels as "D0.5", "D1", "D2"
-my_data$dose <- factor(my_data$dose, 
+my_data$dose <- factor(my_data$dose,                        #Instead of displayng 0.5,1, 2 i change them in an arbitraty string
                   levels = c(0.5, 1, 2),
                   labels = c("D0.5", "D1", "D2"))
 head(my_data)
 ```
 
-## One-way Analysis of Variance (ANOVA)
+## One-way Analysis of Variance (ANOVA) In this case I'm just using length and levels ignoring the methods of feeding
 
 In one-way ANOVA, the data is organized into several groups (or levels) based on one single grouping variable (also called factor variable).
 Null hypothesis: the means of the different groups are the same
 
-?? We want to know if there is any significant difference between the average tooth length in the 3 dose levels.
+?? We want to know if there is any significant difference between the average tooth length in the 3 dose levels. (len variable)
 
 The R function aov() can be used to answer to this question.
 
@@ -99,7 +99,7 @@ The function TukeyHD() takes the fitted ANOVA as an argument.
 
 ```{r}
 # Tukey Significant Differences : why of the average is the different one?
-TukeyHSD(res.aov) 
+TukeyHSD(res.aov)                 #Compares each possible pair of values
 ```
 
 The output includes the columns diff value (i.e. difference between means of the two groups) and p adj corresponding to the p-value of the test after adjustment for the multiple comparisons.
@@ -117,7 +117,7 @@ Null Hypothesis: 1) There is no difference in the means of factor A; 2) There is
 
 ```{r}
 # Analysis of Variance: tooth length depends on supp, dose and their combined effect
-res.aov2  = aov(len ~ supp + dose + supp*dose, data= my_data) 
+res.aov2  = aov(len ~ supp + dose + supp*dose, data= my_data)   #Significa valuta len separatamente su sup, su dose e sull'interazione di sup e dose, il + e il * sono solo sintassi
 # Summary of the analysis
 summary(res.aov2)                                    
 ```
