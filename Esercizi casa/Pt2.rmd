@@ -1,0 +1,262 @@
+---
+title: "Individual R test 2"
+date: '21-12-2023'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## About R Markdown (.Rmd file)
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document.
+
+
+## Instructions
+
+- Put the .Rmd file and the .tsv file in the same folder.
+- Work in a directory within your home directory.
+- DO NOT write anything outside the curly brackets.
+- DO NOT modify the existing chuck of code.
+
+
+
+## Load data
+
+DO NOT MODIFY THE CODE BELOW.
+
+```{r}
+# Run this chunk of code to load the raw count data from file "GSE147507_RawReadCounts_Human.tsv"
+# The code load the raw count matrix into a data.frame (genes on rows, samples on columns; both rows and columns have names)
+# 21797 genes and 69 samples across multiple conditions ("SARS.CoV.2", "Mock", "IAV", ...)
+DATA <- read.table("GSE147507_RawReadCounts_Human.tsv", sep="\t", row.names=1, header=TRUE)
+
+# consider only 2 conditions: "SARS.CoV.2" and "Mock"
+# get the column indices of Patients (i.e. SARS.CoV.2) and Ctrl (i.e. Mock) samples
+indSARS2 <- grep("SARS.CoV.2", colnames(DATA)) 
+l1 <- length(indSARS2) # 15 samples
+indCTRL <- grep("Mock", colnames(DATA)) 
+l2 <- length(indCTRL) # 26 samples
+
+# resize the count matrix to contain only the selected conditions
+DATA <- DATA[, c(indSARS2,indCTRL)] # 21797 genes and 41 samples across 2 conditions
+print(DATA)
+```
+
+
+
+## Exercise 1: Write the function MvAplot() 
+
+### Details
+
+The function MvAplot():
+
+
+takes as input
+
+  - exprData: a numeric data matrix that is supposed to have the same format of the raw count data provided in the .tsv file (i.e. genes’IDs on rows and samples’IDs on columns)
+  - pdffilename: the name of the .pdf file where to save the plots
+
+
+generates a .pdf file with MvA plots of each sample vs. sample 1 (one plot per page). For each plot:
+
+  - Provide meaningful names for the x-axis, y-axis and plot title.
+  - Draw a horizontal red line corresponding to the x-axis (i.e. y = 0).
+  - Tune the size of the plot and the size/type of the points to make the plot readable.
+
+
+Notes: 
+
+- If necessary, transform data frames in matrix objects
+- Remember you have to work in a directory within your home directory
+
+
+```{r}
+MvAplot <- function(exprData, pdffilename) {
+  
+  # WRITE YOUR CODE HERE
+ 
+}
+```
+
+
+### Testing
+
+I will test your code by running your function as follow (DO NOT MODIFY THE CODE BELOW)
+
+```{r}
+# uncomment the code to test your code
+# MvAplot(DATA,"MvAplot.pdf")
+```
+
+
+
+## Exercise 2: Write the function TMM normalization
+
+### Details
+
+Based on the MvA plot we need to normalize the data. 
+You have to complete the function TMMnorm() which is a simplified version with respect to the one implemented during the group exercise.
+
+
+TMMnorm() takes as input:
+
+ - exprData: a numeric data matrix that is supposed to have the same format of the raw count data provided in .tsv file (i.e. genes’IDs on rows and samples’IDs on columns)
+ - Atrim: a vector of 2 elements indicating the lower and upper thresholds to trim the most extreme values of A (where A is the average in log2 scale)
+ - Mtrim: a number between 0 and 1 indicating the fraction of observations to be deleted from each end (positive and negative values) of the sorted vector M before calculating the mean (where Ms are the log ratios defined as in the MvA plot)
+
+
+The function TMMnorm() (**READ CAREFULLY... IT IS SIMPLIFIED WITH RESPECT TO THE GROUP EXERCISE!**)
+
+- Calculates the scaling factors SF (with respect to sample 1) by trimming the most extreme values of A and taking the trimmed means of M values (suggestion: use the R function mean())
+- Normalizes the data by their scaling factors SF with respect to sample 1
+- Returns a list of 2 elements: i) the vector of the scaling factors; ii) the normalized matrix (in the original scale, not in log scale)
+
+
+```{r}
+TMMnorm <- function(exprData, Atrim = c(0,8), Mtrim = 0.02) {
+
+  # WRITE YOUR CODE HERE
+  
+}
+```
+
+
+### Testing
+
+I will test your code by running your function as follow (DO NOT MODIFY THE CODE BELOW)
+```{r}
+# uncomment the code to test your code
+#
+# outTMM <- TMMnorm(DATA, Atrim = c(0,8), Mtrim=0.02)
+# 
+# outSF <- outTMM[[1]]
+# print(outSF)
+# 
+# outNormData <- outTMM[[2]]
+# print(outNormData[1:5, 1:3])
+# 
+# MvAplot(outNormData,"Norm_MvAplot.pdf")
+```
+
+
+
+## Exercise 3: Write the function to perform differenatial expression (DE) analysis with Wilcoxon test
+
+### Details
+Now we run a Wilcoxon test between the two groups and 
+
+ - Calculate the p-values (not corrected for multiple testing) between the 2 groups/conditions.
+ - Calculate the expected number of false positives (FP), false negatives (FN) and the FDR in correspondence to the given choice of alpha.
+ - Calculate q-values using Benjamini-Hockberg procedure.
+ - Calculate the log fold change of the (normalized) expression value of Condition A over Condition B, i.e. log2 [(avg normalized gene expression in Condition A) / (avg normalized gene expression of Condition B)].
+ 
+
+The function DEbyWilcoxon() takes as input
+
+ - normdat: a numeric normalized data matrix that is supposed to have genes’IDs on rows and subjects’IDs on columns
+ - groups: a vector of labels corresponding to the columns of the input normalized data matrix (implement the function assuming to have always 2 different labels, i.e. 2 groups/conditions)
+ - condition_A: a string containing the name of the label/condition to be used as condition A
+ - alpha: the significance level (default 0.05)
+ - P0: the % of genes assumed to be NOT DE to be used to calculate the expected FP, FN and FDR
+
+
+The function DEbyWilcoxon() gives as output a list of two elements
+
+ - A vector of 4 elements with: 
+i) the number of selected genes in correspondence to the significance level alpha 
+ii) the corresponding estimate of the expected number of false positives (FP) 
+iii) the corresponding estimate of the expected number of false negatives (FN)
+iv) the corresponding FDR
+
+ - A matrix with 3 columns: p values, q values (obtained with the Benjamini-Hockberg procedure) and log fold change (LFC) of each gene. The matrix must have row names corresponding to the gene names. The matrix must have column names set to c("pval","qval","LFC").
+
+Note: part of the function is already written by me. Write your code only where specifically indicated
+
+```{r}
+DEbyWilcoxon <- function(normdat, groups, condition_A, alpha = 0.05, P0=0.8) {
+  
+  # check that there are only two possible values for the group labels
+  lab <- unique(groups)
+  if (length(lab) != 2){
+    cat("\n Wrong labels", lab)
+  } 
+  
+  # get the two labels value
+  if(lab[1] == condition_A){ # if the first label is the one correspoding to condition A
+    condA <- lab[1]
+    condB <- lab[2]
+  }else{
+    condB <- lab[1]
+    condA <- lab[2]
+  }
+  cat("\n Performing the Wilcoxon test on ", condA, " vs. ", condB, "\n")
+  
+  
+  # find the indices of normdat columns corresponding to Condition A and Condition B, and put them in variables indA and indB, respectively
+  indA <- ...# WRITE HERE THE LINE OF CODE TO FIND THE SAMPLE/COLUMN INDICES CORRESPONDING TO Condition A
+  indB <- ...# WRITE HERE THE LINE OF CODE TO FIND THE SAMPLE/COLUMN INDICES CORRESPONDING TO Condition B
+
+  
+  # compute the pvalues
+  NGENES <- dim(normdat)[1]
+  pval <- rep(1, NGENES)
+  for (i in (1:NGENES)){# for each gene
+    
+    # extract the normalized expression levels of current gene i in Condition A and Condition B
+    expr_CondA <- ... # WRITE HERE THE LINE OF CODE TO GET THE NORMALIZED EXPRESSION LEVELS OF CURRENT GENE i IN Condition A
+    expr_CondB <- ... # WRITE HERE THE LINE OF CODE TO GET THE NORMALIZED EXPRESSION LEVELS OF CURRENT GENE i IN Condition B
+
+    # compute the wilcoxon test and get the pvalue
+    pval[i] <- wilcox.test(x = expr_CondA,
+                           y = expr_CondB,
+                           exact=F,
+                           digits.rank =7)$p.val
+  }
+  
+  
+  # WRITE HERE THE CODE TO COMPUTE 
+  # - THE NUMBER OF SELECTED GENES IN CORRESPONDENCE TO THE SIGNIFICANCE LEVEL ALPHA
+  # - THE EXPECTED NUMBER OF FPs, FNs AND THE FDR IN CORRESPONDENCE TO THE GIVEN CHOICE OF ALPHA
+
+  
+  # WRITE HERE THE CODE TO COMPUTE 
+  # - THE Q-VALUES USING THE Benjamini-Hockberg PROCEDURE
+  # - THE LOG FOLD CHANGE (Condition A OVER Condition B)
+
+  
+  # WRITE HERE THE CODE TO FORMAT THE RESULTS AS REQUIRED, AND RETURN THEM
+
+}
+```
+
+
+### Testing
+
+I will test your code by running your function as follow (DO NOT MODIFY THE CODE BELOW).
+
+```{r}
+# uncomment the code to test your code
+# 
+# # Create Groups
+# grouplabels <- c(rep("Sarscov2",l1), rep("CTRL",l2))
+# condA_label <- "Sarscov2"
+# 
+# # Filter-out null rows (i.e. rows containing all zero entries), if any
+# S <- apply(abs(outNormData), 1, sum)
+# FiltNormData <- outNormData[-which(S==0),]
+# 
+# # Run the function
+# res <- DEbyWilcoxon(normdat = as.matrix(FiltNormData), 
+#                     groups = grouplabels, 
+#                     condition_A = condA_label, 
+#                     alpha = 0.05)
+# 
+# # Check the output
+# estimates <- res[[1]]
+# matpq <- res[[2]]
+# cat("\n Salpha = ",estimates[1],"\n FP = ",estimates[2],"\n FN = ",estimates[3],"\n FDR = ",estimates[4])
+# print(head(matpq))
+```
