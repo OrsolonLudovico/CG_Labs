@@ -75,8 +75,20 @@ Notes:
 
 ```{r}
 MvAplot <- function(exprData, pdffilename) {
-  
-  # WRITE YOUR CODE HERE
+  pdf(pdffilename)
+  s1 <- exprData[,1]
+  exprData[exprData == 0] <- 1
+  for(i in 2:ncol(exprData)){
+    print(paste(i, "/ ", ncol(exprData)))
+    s_i <- exprData[,i]
+    
+    M <- log2(s1 / s_i)
+    A <- log2(s1* s_i) / 2
+    
+    plot(A,M, ylab = "M", xlab = "A", main = paste("MvA plot of ", colnames(exprData)[1], " vs ", colnames(exprData)[i]))
+    abline(h = 0, col="red")
+  }
+  while(length(dev.list()) > 0){dev.off()}
  
 }
 ```
@@ -88,7 +100,7 @@ I will test your code by running your function as follow (DO NOT MODIFY THE CODE
 
 ```{r}
 # uncomment the code to test your code
-# MvAplot(DATA,"MvAplot.pdf")
+MvAplot(DATA,"MvAplot.pdf")
 ```
 
 
@@ -117,8 +129,29 @@ The function TMMnorm() (**READ CAREFULLY... IT IS SIMPLIFIED WITH RESPECT TO THE
 
 ```{r}
 TMMnorm <- function(exprData, Atrim = c(0,8), Mtrim = 0.02) {
-
-  # WRITE YOUR CODE HERE
+  exprData[exprData == 0] <- 1
+  s1 <- exprData[,1]
+  scalingF_vector <- rep(0,10)
+  scalingF_vector[1] <- 1
+  
+  for(i in 2:ncol(exprData)){
+    si <- exprData[,i]
+    A <- log2(s1 * si)/2
+    #print(length(A))
+    A_index <- which(A >= Atrim[1] & A <= Atrim[2])
+    #print(length(A_index))
+    M <- log2(s1/si)
+    #print(length(M))
+    M <- M[A_index]
+    #print(length(M))
+    
+    SF = mean(M, trim=Mtrim, na.rm = TRUE)
+    
+    exprData[,i] <- si * 2^SF
+    scalingF_vector[i] <- 2^SF
+  }
+  
+  return(list(scalingF_vector,exprData))
   
 }
 ```
@@ -130,15 +163,15 @@ I will test your code by running your function as follow (DO NOT MODIFY THE CODE
 ```{r}
 # uncomment the code to test your code
 #
-# outTMM <- TMMnorm(DATA, Atrim = c(0,8), Mtrim=0.02)
+outTMM <- TMMnorm(DATA, Atrim = c(0,8), Mtrim=0.02)
 # 
-# outSF <- outTMM[[1]]
-# print(outSF)
+ outSF <- outTMM[[1]]
+ print(outSF)
 # 
-# outNormData <- outTMM[[2]]
-# print(outNormData[1:5, 1:3])
+ outNormData <- outTMM[[2]]
+ print(outNormData[1:5, 1:3])
 # 
-# MvAplot(outNormData,"Norm_MvAplot.pdf")
+ MvAplot(outNormData,"Norm_MvAplot.pdf")
 ```
 
 
