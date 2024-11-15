@@ -215,7 +215,7 @@ DEbyWilcoxon <- function(normdat, groups, condition_A, alpha = 0.05, P0=0.8) {
   lab <- unique(groups)
   if (length(lab) != 2){
     cat("\n Wrong labels", lab)
-  } 
+  }
   
   # get the two labels value
   if(lab[1] == condition_A){ # if the first label is the one correspoding to condition A
@@ -227,20 +227,24 @@ DEbyWilcoxon <- function(normdat, groups, condition_A, alpha = 0.05, P0=0.8) {
   }
   cat("\n Performing the Wilcoxon test on ", condA, " vs. ", condB, "\n")
   
-  
   # find the indices of normdat columns corresponding to Condition A and Condition B, and put them in variables indA and indB, respectively
-  indA <- ...# WRITE HERE THE LINE OF CODE TO FIND THE SAMPLE/COLUMN INDICES CORRESPONDING TO Condition A
-  indB <- ...# WRITE HERE THE LINE OF CODE TO FIND THE SAMPLE/COLUMN INDICES CORRESPONDING TO Condition B
-
+  indA <- grep(condA, gsub("\\.", "", colnames(normdat)), ignore.case = TRUE)
+  indB <- grep(condA, gsub("\\.", "", colnames(normdat)), ignore.case = TRUE, invert = TRUE)
+  
+  print(indA)
+  print(indB)
   
   # compute the pvalues
   NGENES <- dim(normdat)[1]
   pval <- rep(1, NGENES)
   for (i in (1:NGENES)){# for each gene
-    
+    print(paste(i, " / ", NGENES))
     # extract the normalized expression levels of current gene i in Condition A and Condition B
-    expr_CondA <- ... # WRITE HERE THE LINE OF CODE TO GET THE NORMALIZED EXPRESSION LEVELS OF CURRENT GENE i IN Condition A
-    expr_CondB <- ... # WRITE HERE THE LINE OF CODE TO GET THE NORMALIZED EXPRESSION LEVELS OF CURRENT GENE i IN Condition B
+    #print(ncol(normdat))
+    #print(nrow(normdat))
+    row <- normdat[i,]
+    expr_CondA <- row[indA]
+    expr_CondB <- row[indB]
 
     # compute the wilcoxon test and get the pvalue
     pval[i] <- wilcox.test(x = expr_CondA,
@@ -252,15 +256,53 @@ DEbyWilcoxon <- function(normdat, groups, condition_A, alpha = 0.05, P0=0.8) {
   
   # WRITE HERE THE CODE TO COMPUTE 
   # - THE NUMBER OF SELECTED GENES IN CORRESPONDENCE TO THE SIGNIFICANCE LEVEL ALPHA
+  p_sorted <- sort(pval, decreasing = FALSE, na.last = TRUE)
+  p_ranks <- rank(p_sorted, ties.method = "min")
+  q_values <- (p_sorted * NGENES) / p_ranks
+  q_values <- order(order(pval))
+  
+  selected_genes_indexes <- which(q_values < alpha)
+  selected_genes <- normdat[selected_genes_indexes,]
+  
+  return_v <- rep(0,4)
+  n_selected <- length(selected_genes)
+  return_v[1] <- n_selected
+  
+  
+  
   # - THE EXPECTED NUMBER OF FPs, FNs AND THE FDR IN CORRESPONDENCE TO THE GIVEN CHOICE OF ALPHA
-
+  G0   <- P0 * NGENES
+  E_FP <- min(n_selected, G0 * alpha)
+  E_TP <- max(0, NGENES - n_selected)
+  E_TN <- min(NGENES - n_selected,G0 - E_FP)
+  E_FN <- NGENES - E_FP - E_TP - E_TN
   
-  # WRITE HERE THE CODE TO COMPUTE 
-  # - THE Q-VALUES USING THE Benjamini-Hockberg PROCEDURE
+  return_v[2] <- E_FP
+  return_v[3] <- E_FN
+  
+  return_v[4] <- (E_FP/n_selected)
+  
+  # WRITE HERE THE CODE TO COMPUTE
+  return_mat <- cbind(pval, q_values)
+  
+  logfold <- rep(0, NGENES)
+  for(i in 1:NGENES){
+    print(paste(i, " / ", NGENES))
+    row <- normdat[i,]
+    row_A <- row[indA]
+    row_B <- row[indB]
+    
+    
+    logfold[i] <- log2((mean(row_A))/(mean(row_B)))
+  }
+  
   # - THE LOG FOLD CHANGE (Condition A OVER Condition B)
-
   
+  return_mat <- cbind(return_mat, logfold)
+  colnames(return_mat) <- c("pval","qval","LFC")
   # WRITE HERE THE CODE TO FORMAT THE RESULTS AS REQUIRED, AND RETURN THEM
+  
+  return(list(return_v, return_mat))
 
 }
 ```
@@ -274,22 +316,28 @@ I will test your code by running your function as follow (DO NOT MODIFY THE CODE
 # uncomment the code to test your code
 # 
 # # Create Groups
-# grouplabels <- c(rep("Sarscov2",l1), rep("CTRL",l2))
-# condA_label <- "Sarscov2"
+grouplabels <- c(rep("Sarscov2",l1), rep("CTRL",l2))
+condA_label <- "Sarscov2"
 # 
 # # Filter-out null rows (i.e. rows containing all zero entries), if any
-# S <- apply(abs(outNormData), 1, sum)
-# FiltNormData <- outNormData[-which(S==0),]
+ S <- apply(abs(outNormData), 1, sum)
+ filter_out <- which(S==0)
+ 
+ if(length(filter_out) > 0){
+   FiltNormData <- outNormData[-which(S==0),]
+ } else{
+   FiltNormData <- outNormData
+ }
 # 
 # # Run the function
-# res <- DEbyWilcoxon(normdat = as.matrix(FiltNormData), 
-#                     groups = grouplabels, 
-#                     condition_A = condA_label, 
-#                     alpha = 0.05)
-# 
+ res <- DEbyWilcoxon(normdat = as.matrix(FiltNormData), 
+                     groups = grouplabels, 
+                     condition_A = condA_label, 
+                     alpha = 0.05)
+
 # # Check the output
-# estimates <- res[[1]]
-# matpq <- res[[2]]
-# cat("\n Salpha = ",estimates[1],"\n FP = ",estimates[2],"\n FN = ",estimates[3],"\n FDR = ",estimates[4])
-# print(head(matpq))
+ estimates <- res[[1]]
+ matpq <- res[[2]]
+ cat("\n Salpha = ",estimates[1],"\n FP = ",estimates[2],"\n FN = ",estimates[3],"\n FDR = ",estimates[4])
+ print(head(matpq))
 ```
