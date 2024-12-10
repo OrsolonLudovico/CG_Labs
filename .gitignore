@@ -1,4 +1,4 @@
 #The following files will not be uploaded on the repository (it's wasteful to do so)
 .Rhistory
 .csv
-.RData
+*.RData
