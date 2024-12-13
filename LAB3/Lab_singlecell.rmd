@@ -205,7 +205,7 @@ We can check that the estimated library sizes are not too far from the library s
 plot(librarySizeFactors(sce),sizeFactors(sce), xlab="Library size factors", ylab="Deconvolution size factors", log="xy", col=as.integer(factor(cl))); abline(a=0,b=1,col="red")
 ```
 
-# *Highly variable genes (HVGs)*
+# *Highly variable genes (HVGs) Highest variable genes*
 
 High variable genes are the genes in which we are most interest in ... they are carrying biologically relevant information, they vary between cells.
 The simplest approach to quantifying per-gene variation is to compute the variance of the log-normalized expression values for each gene across all cells
