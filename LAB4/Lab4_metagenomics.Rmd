@@ -1,0 +1,686 @@
+---
+title: "Preprocessing microbiome data"
+author: "Barbara Di Camillo, Marco Cappellato"
+output:
+  html_document:
+    theme: readable
+    toc: yes
+    toc_depth: 3
+    number_sections: true
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width=8, fig.height=6, fig.align = 'center', fig.path = "fig/")
+```
+
+### Load the data
+
+Let's load our data (sample as columns and taxa as rows)
+
+```{r message = FALSE}
+#read the raw otu table saved at genus level
+feature_table_gen <- as.matrix(read.table("Genus_otu_table.txt",sep="\t"))
+```
+
+Let's have a look to the data
+```{r}
+dim(feature_table_gen)
+
+head(feature_table_gen)[1:5,1:10]
+```
+
+Compute the level of sparsity of the data (percentage)
+
+```{r include = TRUE}
+
+tot_zeros<- sum(feature_table_gen==0)
+paste("Sparsity =", round(tot_zeros/length(feature_table_gen)*100, digits = 1))
+```
+
+## Data transformation
+
+The sequencing data are compositional, meaning that sequencing only provides information on the relative abundance of features and that each feature's observed abundance is dependent on the observed abundances of all other features.
+
+*Transformation: ratio of read counts between different taxa within a sample.*
+
+The difference among methods is what abundance value is used as the denominator, or the reference, for the transformation
+
+The *centered log-ratio (CLR)* transformation is an approach that uses the geometric mean of the read counts of all taxa within a sample as the reference/denominator for that sample.
+
+In this approach *all taxon read counts within a sample are divided by this geometric mean* and the *log fold changes in this ratio between samples are compared.*
+
+Issue: how to handle zeros?
+
+### CLR transformation *with pseudocounts*
+
+```{r message = FALSE}
+# Add pseudocounts
+feature_table_gen_pseudo <- feature_table_gen+1
+
+np<-dim(feature_table_gen_pseudo)[2] #number of samples
+nt<-dim(feature_table_gen_pseudo)[1] #number of taxa
+
+#initialization
+clrtransform_pseudo<-feature_table_gen_pseudo 
+
+# for each sample
+for (i in (1:np)) {
+  # compute the denominator as geometric mean of column i
+  den <- (prod(feature_table_gen_pseudo[,i]))^(1/nt) 
+  
+  # apply transformation to each taxa (divide each column by the geometric mean and take the log)
+  clrtransform_pseudo[,i] <- log2(feature_table_gen_pseudo[,i]/den) #clr transformation of column i
+}
+
+head(clrtransform_pseudo)[1:5,1:10]
+```
+
+### CLR transformation *without pseudocounts* (second possible approach)
+
+```{r message = FALSE}
+# Clr transformation without pseudocounts
+np<-dim(feature_table_gen)[2] #number of samples
+nt<-dim(feature_table_gen)[1] #number of taxa
+
+#initialization
+clrtransform <- feature_table_gen 
+
+# for each sample
+for (i in (1:np)) {
+  x <- feature_table_gen[,i]
+  
+  #handle zeros
+  x[which(x==0)]<-NA #Since there is NA the geometric mean isn't computed on the zero
+  
+  # compute the denominator as geometric mean of column i (excluding 0)
+  den<-(prod(x,na.rm=TRUE)^(1/length(which(!is.na(x))))) 
+  
+  # apply transformation to each taxa
+  clrtransform[,i]<-log2(x/den)
+  
+  # NA turn back into zeros
+  clrtransform[which(is.na(x)),i]<-0  
+}
+
+
+head(clrtransform)[1:5,1:10]
+```
+
+Bias due to differences in number of zeros and differences in the types of taxa across different samples
+
+**## Normalization**
+
+The transformation solve the issue of relative quantification partially, we need to do normalization. We will see the geometric mean of pairwise ratios (GMPR) normalization
+
+### *GMPR normalization*
+
+Assumption: the dataset has a large invariant part, i.e. the majority of features do not change
+
+STEP1: Calculate the median count ratio of nonzero counts between samples j and sample k (rjk) (for each pairwise samples (all possible combinations), compute the ration between counts across taxas and then take the median). Only for nonzero counts
+
+STEP2: calculate the size factor for sample j as the geometric means of rjk
+
+STEP3: normalize by dividing the counts by the corresponding size factor
+
+**!!!** **Well-known bugs in GMPR**: In some versions of R, GMPR can not handle as input a matrix. In this case, covert the matrix into a data.frame using the R function as.data.frame()
+
+```{r warning = FALSE}
+library(GMPR)
+# GMPR expect samples on rows... we need to transpose the count matrix
+GMPR_factors<- GMPR(OTUmatrix = as.data.frame(t(feature_table_gen)), min_ct = 2, intersect_no = 4) #see help for parameters meaning
+
+GMPR_factors[1:10]
+```
+
+GMPR function provides the size factors... We need to perform the normalization
+
+```{r}
+#apply normalization
+feature_table_gen_gmpr<- t(t(feature_table_gen)/GMPR_factors)    #divide la matrice per righe (trasposta) e poi la traspone di nuovo
+
+head(feature_table_gen)[1:5,1:10]
+head(feature_table_gen_gmpr)[1:5,1:10]
+```
+
+## *IMPUTATION*
+
+### mbImpute 
+
+The goal of mbImpute is to impute false zero counts in microbiome sequencing data, by *jointly borrowing information from similar samples*, similar taxa and optional metadata including sample covariates and taxon phylogeny.
+
+-   Step 1: identification of taxon abundances that need imputation. mbImpute does not impute all zeros in the taxon count matrix; instead, *it first identifies the abundances that are likely missing using a mixture-modelling approachm*
+
+-   Step 2: imputation of the missing taxon abundances. it *imputes these zeros using count that do not need imputation* by borrowing information from similar taxa (determined by both phylogeny and counts) and sample covariates (experimental groups)
+
+it takes around 8 minutes to run!
+
+```{r include = TRUE}
+#it takes around 8 minutes to run
+
+library(mbImpute)
+label_samples<-read.table("metadata_table.txt",sep="\t",header=T)
+
+# mbImpute expect samples on rows... we need to transpose the count matrix
+imp_count_mats <- mbImpute(condition = label_samples$DiseaseState, otu_tab = t(feature_table_gen), unnormalized = T)
+```
+
+mbImpute *returns a list three imputed OTU matrices*.
+
+-   imp_count_mat_lognorm: imputed normalized and log transformed matrix.
+
+-   imp_count_mat_norm : imputed normalized count matrix with library size of each sample equal to 10\^6.
+
+-   imp_count_mat_origlibsize: imputed countmatrix at the original library size.
+
+They recommend to use the first one imp_count_mat_lognorm. So that *the log scaled counts follows approximately Normal for each taxon across samples.*
+
+```{r include = FALSE}
+imp_count_mats <- readRDS("imp_count_mats.rds")
+imp_count_mat <-t(imp_count_mats[[3]])
+```
+
+Let's print the original sparsity and % of imputed data
+
+```{r include = TRUE}
+
+tot_zeros<- sum(feature_table_gen==0)
+tot_zeros_imp<- sum(imp_count_mat==0) 
+
+paste("Sparsity =", round(tot_zeros/length(feature_table_gen)*100, digits = 1))
+paste("Perc imputed =",round((tot_zeros-tot_zeros_imp)/length(feature_table_gen)*100, digits = 1))
+paste("Imputed sparsity =",round((tot_zeros_imp)/length(feature_table_gen)*100, digits = 1))
+```
+
+**## PCA **
+
+### Effect of processing step on PCA
+
+```{r include = FALSE}
+
+PCA<-function(dati,condition){
+  dati<-t(dati) # 
+  N<-dim(dati)[1] #objects
+  M<-dim(dati)[2] #genes (variables)
+  S<-cov(dati)
+  Eig<-eigen(S)
+  lambda<-Eig[[1]] #eigenvalues
+  PCs<-Eig[[2]] #eigenvectors (matrix V)
+  varperc<-rep(0,M)
+  for (i in (1:M)) varperc[i]<-sum(lambda[1:i])/sum(lambda)
+  plot(varperc,type="b")
+  Y<-dati%*%PCs # projection of the N objects in the new coordinates along the M PCs
+  nmc<-names(table(condition))
+  L<-length(nmc)
+  plot(Y[,1],Y[,2]) # in this plot I am showing data in D=2 dim
+  for (i in (2:L)) points(Y[which(condition==nmc[i]),1],Y[which(condition==nmc[i]),2],col=(i+1))
+  #data can be reconstructed
+  #rec_dati<-Y%*%t(PCs)
+  return(list(Y,PCs,lambda))
+}
+```
+
+PCA of raw count data
+
+```{r}
+resPCA<-PCA(feature_table_gen,condition=label_samples$DiseaseState)
+```
+
+PCA of clr transformed data
+
+```{r}
+resPCA<-PCA(clrtransform,condition=label_samples$DiseaseState)
+```
+
+PCA of GMPR normalized data
+
+```{r}
+resPCA<-PCA(feature_table_gen_gmpr,condition=label_samples$DiseaseState)
+```
+
+PCA of mbImpute imputed data
+
+```{r}
+resPCA<-PCA(imp_count_mat,condition=label_samples$DiseaseState)
+```
+
+#### Impute the data and then clr transform to work on Euclidean space (should be the same as before)
+
+```{r message = FALSE}
+# Clr transformation without pseudocounts on imputed data
+np<-dim(imp_count_mat)[2] #number of samples
+nt<-dim(imp_count_mat)[1] #number of taxa
+
+impclr_count_mat<-imp_count_mat #just to initialize clrtransform
+
+#for each sample
+for (i in (1:np)) {
+  x<-imp_count_mat[,i]
+  
+  #handle zeros
+  x[which(x==0)]<-NA
+  
+  # compute the denominator as geometric mean of column i (excluding 0)
+  den<-(prod(x,na.rm=TRUE)^(1/length(which(!is.na(x)))))
+  
+  # apply transformation to each taxa
+  impclr_count_mat[,i]<-log2(x/den) 
+  
+  # handle NA values (original zeros)
+  impclr_count_mat[which(is.na(x)),i]<-0
+}
+
+head(imp_count_mat)[1:5,1:10]
+head(impclr_count_mat)[1:5,1:10]
+
+resPCA<-PCA(impclr_count_mat,condition=label_samples$DiseaseState)
+```
+
+**## UMAP**
+
+### Effect of processing step on visualization
+
+```{r}
+#BiocManager::install("umap")
+library(umap)
+umap.defaults
+```
+
+Run UMAP on raw data
+
+```{r}
+# indices of CDI samples 
+indCDI <- which(label_samples$DiseaseState=="CDI")
+
+# REMEMBER to TRANSPOSE THE MATRIX (IF NEEDED) samples to be projected must be on rows
+res.umap <- umap(t(feature_table_gen))
+head(res.umap$layout, 3)
+
+# plot results
+plot(res.umap$layout[,1], res.umap$layout[,2])
+points(res.umap$layout[indCDI,1], res.umap$layout[indCDI,2], col=2)
+```
+
+Run UMAP on clr-transformed count data
+
+```{r}
+res.umap <- umap(t(clrtransform))
+head(res.umap$layout, 3)
+
+plot(res.umap$layout[,1],res.umap$layout[,2])
+points(res.umap$layout[indCDI,1],res.umap$layout[indCDI,2],col=2)
+```
+
+Run UMAP on imputed count data
+
+```{r}
+res.umap <- umap(t(imp_count_mat))
+head(res.umap$layout, 3)
+
+plot(res.umap$layout[,1], res.umap$layout[,2])
+points(res.umap$layout[indCDI,1], res.umap$layout[indCDI,2], col=2)
+```
+
+Run UMAP on imputed and clr-transformed count data
+
+```{r}
+res.umap <- umap(t(impclr_count_mat))
+head(res.umap$layout, 3)
+
+plot(res.umap$layout[,1], res.umap$layout[,2])
+points(res.umap$layout[indCDI,1], res.umap$layout[indCDI,2], col=2)
+```
+
+Using more than 2 components (i.e. dimensions)
+
+```{r}
+res.umap <- umap(t(impclr_count_mat), n_components=3) ##3 components!
+
+# plot component 1 vs component 2
+plot(res.umap$layout[,1],res.umap$layout[,2])
+points(res.umap$layout[indCDI,1], res.umap$layout[indCDI,2], col=2)
+
+# plot component 1 vs component 3
+plot(res.umap$layout[,1],res.umap$layout[,3])
+points(res.umap$layout[indCDI,1], res.umap$layout[indCDI,3], col=2)
+
+# plot component 2 vs component 3
+plot(res.umap$layout[,2],res.umap$layout[,3])
+points(res.umap$layout[indCDI,2], res.umap$layout[indCDI,3], col=2)
+```
+
+### *Effect of neighborhood parameter*
+
+k = 3 (Let's try for different k)
+
+```{r}
+res.umap <- umap(t(impclr_count_mat), n_neighbors = 3)
+
+# plot
+plot(res.umap$layout[,1],res.umap$layout[,2])
+points(res.umap$layout[indCDI,1], res.umap$layout[indCDI,2], col=2)
+```
+
+k = 4
+
+```{r}
+res.umap <- umap(t(impclr_count_mat), n_neighbors = 4)
+
+# plot
+plot(res.umap$layout[,1],res.umap$layout[,2])
+points(res.umap$layout[indCDI,1], res.umap$layout[indCDI,2], col=2)
+```
+
+k = 5
+
+```{r}
+res.umap <- umap(t(impclr_count_mat), n_neighbors = 5)
+
+# plot
+plot(res.umap$layout[,1],res.umap$layout[,2])
+points(res.umap$layout[indCDI,1], res.umap$layout[indCDI,2], col=2)
+```
+
+k = 10
+
+```{r}
+res.umap <- umap(t(impclr_count_mat), n_neighbors = 10)
+
+# plot
+plot(res.umap$layout[,1],res.umap$layout[,2])
+points(res.umap$layout[indCDI,1], res.umap$layout[indCDI,2], col=2)
+```
+
+k = 20
+
+```{r}
+res.umap <- umap(t(impclr_count_mat), n_neighbors = 20)
+
+# plot
+plot(res.umap$layout[,1],res.umap$layout[,2])
+points(res.umap$layout[indCDI,1], res.umap$layout[indCDI,2], col=2)
+```
+
+k = 50
+
+```{r}
+res.umap <- umap(t(impclr_count_mat), n_neighbors = 50)
+
+# plot
+plot(res.umap$layout[,1],res.umap$layout[,2])
+points(res.umap$layout[indCDI,1], res.umap$layout[indCDI,2], col=2)
+```
+
+**## TSNE**
+
+### Effect of processing step on visualization
+
+```{r}
+#BiocManager::install("M3C")
+library(M3C)
+```
+
+The main input parameters:
+
+\- mydata: Data frame or matrix: if dataframe/matrix should have samples as columns and rows as features
+
+\- labels: Character vector: if we want to just label with gender for example
+
+\- perplex: Numerical value: perplexity value that Rtsne uses internally (let's use 10)
+
+Run TSNE on raw data
+
+```{r}
+tsne(mydata = feature_table_gen, 
+     labels = label_samples$DiseaseState, 
+     perplex=10)
+```
+
+t-SNE is a stochastic procedure: *you may obtain different results at each invocation*
+
+```{r}
+tsne(mydata = feature_table_gen, 
+     labels = label_samples$DiseaseState, 
+     perplex=10)
+```
+
+Run TSNE on clr-transformed count data
+
+```{r}
+tsne(mydata = clrtransform, 
+     labels = label_samples$DiseaseState, 
+     perplex = 10)
+```
+
+Run TSNE on Imputed count data
+
+```{r}
+tsne(mydata = imp_count_mat, 
+     labels = label_samples$DiseaseState, 
+     perplex = 10)
+```
+
+Run TSNE on Imputed and clr-transformed count data
+
+```{r}
+tsne(mydata = impclr_count_mat,
+     labels = label_samples$DiseaseState,
+     perplex = 10)
+```
+
+### *Effect of perplexity parameter on visualization*(Try different preplexity values)
+
+perplexity = 1
+
+```{r}
+tsne(mydata = impclr_count_mat,
+     labels = label_samples$DiseaseState,
+     perplex = 1)
+```
+
+perplexity = 3
+
+```{r}
+tsne(mydata = impclr_count_mat,
+     labels = label_samples$DiseaseState,
+     perplex = 3)
+```
+
+perplexity = 5
+
+```{r}
+tsne(mydata = impclr_count_mat,
+     labels = label_samples$DiseaseState,
+     perplex = 5)
+```
+
+perplexity = 15
+
+```{r}
+tsne(mydata = impclr_count_mat,
+     labels = label_samples$DiseaseState,
+     perplex = 15)
+```
+
+perplexity = 50
+
+```{r}
+tsne(mydata = impclr_count_mat,
+     labels = label_samples$DiseaseState,
+     perplex = 50)
+```
+
+perplexity = 75
+
+```{r}
+tsne(mydata = impclr_count_mat,
+     labels = label_samples$DiseaseState,
+     perplex = 75)
+```
+
+*## Differential abundance (DA) analysis*
+
+### ALDEx2
+
+Specifically, the *ALDEx2* package
+
+-   generates Monte Carlo samples of the Dirichlet distribution for each sample
+
+-   converts each instance using a log-ratio transform (CLR transformation)
+
+-   returns test results for two sample (Welch's t, Wilcoxon) or multi-sample (glm, Kruskal-Wallace) tests.
+
+The values returned by [*ALDEx2*](https://bioconductor.org/packages/3.21/ALDEx2) are posterior estimates of test statistics calculated on log-ratio transformed distributions.
+
+The function requires as input: the raw count table, the group labels, the number of Monte Carlo samples to use (128 is usually sufficient), and the test to perform (i.e. "t" runs Welch's t and Wilcoxon tests, "kw" runs Kruskal-Wallace and glm tests. "glm" runs a generalized linear model using a `model.matrix`. "corr" runs a correlation test using `cor.test`).
+
+```{r}
+library(ALDEx2)
+
+#INPUT PARAMETERS... SEE HELP
+aldex_results <- aldex(reads = feature_table_gen, conditions =label_samples$DiseaseState, 
+                       mc.samples = 128, test = "t")
+```
+
+Returns a data.frame with the information about the generated random instances of the CLR values ...
+
+-   **rab.all:** a vector containing the median clr value for each feature in all samples
+
+-   **rab.win.CDI**: a vector containing the median clr value for each feature in condition A
+
+-   **rab.win.H**: a vector containing the median clr value for each feature in condition B
+
+-   **diff.btw:** a vector containing the per-feature median difference between condition A and B
+
+-   **diff.win**: a vector containing the per-feature median of the largest difference in clr values between Dirichlet instances within conditions
+
+-   **effect**: a vector containing the per-feature effect size : diff.btw/max(diff.win).
+
+-   **overlap**: a vector containing the per-feature proportion of effect size that is 0 or less (no-effect)
+
+    ...and the test statistics...
+
+-   **we.ep**: a vector containing the expected p-value of Welch's t-test for each feature
+
+-   **we.eBH**: a vector containing the corresponding expected value of the Benjamini-Hochberg corrected p-value of Welch\'s t test for each feature
+
+-   **wi.ep**: a vector containing the expected p-value of the Wilcoxon Rank Sum test for each feature
+
+-   **wi.eBH:** a vector containing the corresponding expected value of the Benjamini-Hochberg corrected of Wilcoxon test p-value for each feature
+
+Keep in mind that if taxa have 0 counts across all subjects they are removed before runing the method. Therefore you might have a number of taxa in output which is lower than the number of taxa in input
+
+```{r}
+head(aldex_results)
+```
+
+### ANCOM-II
+
+ANCOM calculates the log-ratio of each taxon\'s abundance relative to all other taxa for all samples. It uses statistical tests (e.g., t-tests or Mann-Whitney U tests) to determine whether these log-ratios differ significantly between groups (e.g., diseased vs. healthy). The **W-statistic** quantifies how many of these pairwise comparisons are significant for a given taxon. A high W-statistic indicates that a taxon consistently shows significant differences in abundance relative to others, suggesting it is likely to differ between groups systematically.
+
+```{r}
+load("res_ancom.RData")
+```
+
+The method is not available in CRAN, Bioconductor, etc., but you can download it from <https://github.com/FrederickHuangLin/ANCOM>. A copy is provided.
+
+```{r}
+source("ancom.R")
+```
+
+#### Preprocessing
+
+The function **feature_table_pre_process** implements the preprocessing to deal with different types of zeros before performing differential abundance analysis
+
+-   **feature_table**: Data.frame or count matrix with taxa on rows
+
+-   **meta_data**: Data.frame or matrix of metadata
+
+-   **sample_var**: name of the column in meta_data with samples IDs.
+
+-   **group_var**: name of the column in meta_data with groups/conditions IDs.
+
+-   **out_cut**: number between 0 and 1. Observations below \*out_cut\* will be considered outliers zeros
+
+-   **zero_cut**: number between 0 and 1. Taxa with proportion of zeroes greater than `zero_cut` are not included in the analysis.
+
+-   **lib_cut**: samples with seq depth lower than lib_cut are excluded from the analysis
+
+-   **neg_lb**: neg_lb = FALSE considers biological 0 (structural 0) only counts that are 0 across all samples within one group. If TRUE also small values are considered as 0.
+
+```{r}
+# data.frame metadata
+metadata <- data.frame("sample_id"=colnames(feature_table_gen), "group"=label_samples$DiseaseState)
+
+# Preprocessing for handling zeros entries
+# Note: some parameters have no default values, and there are no suggested values for them by ANCOM-II. Here, they were set following what specified in ANCOM-BC
+prepro <- feature_table_pre_process(feature_table = feature_table_gen, meta_data = metadata,sample_var = "sample_id", group_var = "group", out_cut = 0.05, zero_cut = 0.9, lib_cut = 1000, neg_lb = T)
+```
+
+The output is a list:
+
+-   **feature_table**: Data.frame of pre-processed count matrix with taxa on rows
+
+-   **meta_data**: Data.frame or matrix of metadata
+
+-   **structure_zeros**: matrix (taxa on rows and groups on columns) with 1 indicating that the corresponding taxon is a biological (i.e. structural) 0
+
+#### ANCOM main function
+
+The main function compute the W-statistics, i.e. the number of times the test has given a significant result across the (nt-1) test performed for each taxon
+
+The main function ANCOM for detection of differentially abundant taxa
+
+-   **feature_table, meta_data, struc_zero**: output of pre-processing function
+
+-   **main_var**: name of the main variable of interest.
+
+-   **p_adj_method**: specifying the method to adjust p-values for multiple comparisons. Benjamini-Hochberg procedure).
+
+-   **alpha**: Level of significance.
+
+```{r}
+# Let's run ANCOM-II
+feature_table<- prepro$feature_table
+meta_data<- prepro$meta_data
+struc_zero<- prepro$structure_zeros
+
+ancom_results <- ANCOM(feature_table = feature_table, 
+                       meta_data = meta_data, 
+                       struc_zero = struc_zero, 
+                       main_var = "group", p_adj_method = "BH", alpha = 0.05)
+```
+
+The output is a list:
+
+-   **p_data**: Matrix of p_values between taxa (pairwise)
+
+-   **q_data**: Matrix of p_values between taxa (pairwise)
+
+-   **out**: Data.frame with W statistics for each taxon. Columns indicates different cutoffs on W (0,9, 0,8, 0,7, 0,6). TRUE or FALSE indicate if the taxon pass the threshold (is DA)
+
+-   **fig**: Volcano plot (ggplot object) of W vs CLR.
+
+```{r}
+ancom_results[[3]]
+```
+
+Let's analyze the statistic W
+
+```{r}
+W_stat<- ancom_results$out$W[is.finite(ancom_results$out$W)]
+n_taxa<- length(W_stat) 
+
+
+plot(ecdf(W_stat[is.finite(W_stat)]), main ="Empirical cumulative distribution function for W ", xlab = "W")
+abline(v = n_taxa*0.6, col = "red")
+abline(v = n_taxa*0.7, col = "blue")
+abline(v = n_taxa*0.8, col = "green")
+abline(v = n_taxa*0.9, col = "orange")
+legend(30, 1, legend=c("detected_06", "detected_07", "detected_08", "detected_09"), 
+       col=c("red", "blue", "green", "orange"), lty = 1)
+```
+
+A threshold is applied to determine significance: if the W-statistic exceeds a predefined threshold, the taxon is considered differentially abundant.
