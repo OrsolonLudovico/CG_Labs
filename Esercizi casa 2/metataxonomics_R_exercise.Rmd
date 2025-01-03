@@ -61,13 +61,16 @@ ii) second drawing a t-SNE plot showing Females vs. Males with different colors
 
 library(M3C)
 
-#COMPLETE THE CODE 
+tsne(feature_table_gen,labels = label_samples$DiseaseState, perplex = 5, colvec = c("skyblue","gold"))
+
+tsne(feature_table_gen, labels = label_samples$gender, perplex = 5, colvec = c ("red","green"))
 
 
 
 ```
 Do you see any trend? What are your comment on the resulting plots? Write a comment in the code.
 < WRITE HERE YOUR COMMENT >
+Healthy and deseased patients seems to be in  their own separate groups while there is no such difference for male and female patients. This suggest that probably there is a difference in the taxa present in healty and sick patients while there is no diffrence in female and male patients
 
 
 ## Exercise 2: UMAP visualization of raw data
@@ -79,13 +82,25 @@ ii) second drawing a UMAP plot showing Females vs. Males with different colors
 
 library(umap)
 
-#COMPLETE THE CODE
+
+umap_res <- umap(t(feature_table_gen), n_neighbors = 5) #I need to traspose the table 
+colorss <- ifelse(label_samples$DiseaseState == "CDI", "red", "blue")
+plot(umap_res$layout[,1],umap_res$layout[,2], col = colorss)
+
+umap_res <- umap(t(feature_table_gen), n_neighbors = 5) #I need to traspose the table 
+colorss <- ifelse(label_samples$gender == "F", "red", "blue")
+plot(umap_res$layout[,1],umap_res$layout[,2], col = colorss)
 
 
 
 ```
 Do you see any trend? What are your comment on the resulting plots?
 < WRITE HERE YOUR COMMENT >
+As before the communities based on deseasestate are more grouped than the ones on gender, this suggest the same correlation as before
+
+
+
+
 
 
 ## Exercise 3: clr transformation of raw data
@@ -103,12 +118,24 @@ The matrix returned by the function should contain all numerical values, i.e. no
 
 # Clr transformation with or without pseudocounts
 ClrTransform <- function(TaxaTable, pseudocount = FALSE) {
-  
-  #COMPLETE THE CODE
-  
-  
-  
+  if(pseudocount == TRUE){TaxaTable <- TaxaTable + 1}
+  TaxaTable[TaxaTable == 0] <- NA
+  geom <- rep(0,ncol(TaxaTable))
+  for( i in 1:ncol(TaxaTable)){
+    col_i <- TaxaTable[,i]
+    geom[i] <- (prod(col_i, na.rm = TRUE))^(1/length(which(!is.na(col_i))))
+  }
+  TaxaTable <- log2(TaxaTable/geom)
+  TaxaTable[is.na(TaxaTable)] <- 0
+  return(TaxaTable)
 }
+pseudocount <- FALSE
+TaxaTable <- feature_table_gen
+
+ret <- ClrTransform(TaxaTable = TaxaTable, pseudocount = pseudocount)
+
+
+
 ```
 
 DO NOT MODIFY THE CODE BELOW.
@@ -132,7 +159,7 @@ Run ALDEx2
 
 library(ALDEx2)
 
-#COMPLETE THE CODE
+res <- aldex(reads = feature_table_gen, mc.samples = 200, test = "t", conditions = label_samples$DiseaseState)
 
 
 ```
@@ -144,12 +171,18 @@ library(ALDEx2)
 - Run t-SNE (perplexity=5) on such filtered matrix, drawing a t-SNE plot showing CDI infected patients and Healthy subjects with different colors.
 - Run UMAP (k=5) on such filtered matrix, drawing a UMAP plot showing CDI infected patients and Healthy subjects with different colors.
 ```{r message = FALSE}
+pvals <- res$wi.eBH
 
-#COMPLETE THE CODE 
+sign_p <- pvals < 0.05 #True if significant, false if not
+filtered <- clrdata1[sign_p,]
+tsne(filtered,labels = label_samples$DiseaseState, perplex = 5, colvec = c("skyblue","gold"))
 
 
+umap_res <- umap(t(filtered), n_neighbors = 5) #I need to traspose the table 
+colorss <- ifelse(label_samples$DiseaseState == "CDI", "red", "blue")
+plot(umap_res$layout[,1],umap_res$layout[,2], col = colorss)
 ```
 Do you see any trend? What are your comment on the DA analysis and the above plots? 
 < WRITE HERE YOUR COMMENT >
-
+Filtering for differentially expressed genes caused an improvement in the data visualization: now the different colors are better separated than before in both t-sne and UMAP rapresentations
 

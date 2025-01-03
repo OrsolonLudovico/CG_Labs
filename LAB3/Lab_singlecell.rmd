@@ -149,7 +149,7 @@ colnames(colData(sce))
 # *Filtering low expression genes*
 
 The sce object is only the high-quality cells now
-We want to filter ot genes that are likely to bring noise
+We want to filter out genes that are likely to bring noise
 
 In fact, many of the genes that we stored in the object have no UMI in any cell (counts are zero)
 
