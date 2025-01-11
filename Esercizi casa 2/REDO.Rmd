@@ -1,0 +1,173 @@
+---
+title: "Exercize"
+date: '19/12/2024'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+
+## Instructions
+
+- Put the .Rmd file and the .txt file in the same folder.
+- Work in a directory within your home directory.
+- DO NOT modify the existing chuck of code.
+- Write the required code AFTER the placeholder "COMPLETE THE CODE".
+- Comment your code: describe your choice, what the instructions/functions are doing, the meaning of the input parameter you set, what variables contain etc. 
+- CLARITY and COMPLETNESS of the comments will be part of the evaluation.
+- You are free to use the R documentation/help WITHIN RStudio (help panel in the bottom right corner)
+- Some exercise requires to comment (from a bioinformatics point of view) the results/plots, please write the required text after the placeholder "< WRITE HERE YOUR COMMENT >"
+
+
+## Load data
+
+DO NOT MODIFY THE CODE BELOW.
+
+#Here I am cleaning the global environment and loading the data
+#Data are the same used during the course
+```{r}
+
+# Clean Global Environment
+rm(list=ls()); set.seed(0)
+
+# load data OTU table (166 taxa over 245 samples)
+feature_table_gen <- as.matrix(read.table("Genus_otu_table.txt",sep="\t"))
+
+# load metadata. For each sample there are the information about 
+# - sample ID
+# - age
+# - gender (M/F, M=male, F=female)
+# - weight
+# - race
+# - vegetarian diet (yes/no)
+# - state of CDI infection (CDI/H, CDI=infected, H=healthy))
+label_samples <- read.table("metadata_table.txt",sep="\t",header=T)
+```
+
+
+## Exercise 1: t-SNE visualization of raw data
+Use the t-SNE visualization from package "M3C".
+You have to run t-SNE with perplexity parameter equal to 5 to generate 2 plots: 
+i) first drawing a t-SNE plot showing CDI infected patients and Healthy subjects with different colors
+ii) second drawing a t-SNE plot showing Females vs. Males with different colors
+```{r message = FALSE}
+
+library(M3C)
+
+tsne(feature_table_gen, labels = label_samples$DiseaseState, perplex = 5)
+
+
+
+```
+Do you see any trend? What are your comment on the resulting plots? Write a comment in the code.
+< WRITE HERE YOUR COMMENT >
+
+
+## Exercise 2: UMAP visualization of raw data
+Use the UMAP visualization from package "umap".
+You have to run UMAP with k (neighbors) parameter equal to 5 to generate 2 plots:
+i) first drawing a UMAP plot showing CDI infected patients and Healthy subjects with different colors
+ii) second drawing a UMAP plot showing Females vs. Males with different colors
+```{r message = FALSE}
+
+library(umap)
+
+res_umap <- umap(t(feature_table_gen), n_neighbors = 5)
+cols <- ifelse(label_samples$DiseaseState == "H", "red", "blue")
+plot(res_umap$layout[,1], res_umap$layout[,2], col = cols)
+
+```
+Do you see any trend? What are your comment on the resulting plots?
+< WRITE HERE YOUR COMMENT >
+
+
+## Exercise 3: clr transformation of raw data
+Develop the function ClrTransform() such that:
+
+1. Takes as input:
+• TaxaTable: a numeric data matrix that is supposed to have the same format of the feature_table_gen matrix (taxa on rows and samples on columns)
+• pseudocount: a boolean (FALSE by default) indicating if the pseudocount has to be used or not in the clr transformation (i.e. if the function should add a pseudocount to the input matrix before applying the clr transformation)
+
+2. Gives as output:
+a clr transformed data matrix with the same format of the input data. 
+The matrix returned by the function should contain all numerical values, i.e. no NAs: AFTER applying the clr transformation as described above, any NA entry that may be present in the transformed matrix should be substituted by a zero value before returning the matrix.
+
+```{r message = FALSE}
+
+# Clr transformation with or without pseudocounts
+ClrTransform <- function(TaxaTable, pseudocount = FALSE) {
+  tx <- TaxaTable
+  if(pseudocount == TRUE){
+    tx <- tx +1
+  }
+  for(i in (1:ncol(tx))){
+    col <- tx[,i]
+    
+    col <- col[which(col != 0)]
+    geo <- prod(col) ^ (1/length(col))
+    
+    temp <- tx[,i]
+    temp[which(temp == 0)] <- NA
+    TaxaTable[,i] <- log2(temp / geo)
+  }
+  TaxaTable[which(is.na(TaxaTable))] <- 0
+  
+  return(TaxaTable)
+}
+```
+
+DO NOT MODIFY THE CODE BELOW.
+
+```{r message = FALSE}
+# I will test your code running it
+clrdata1 <- ClrTransform(TaxaTable = feature_table_gen, pseudocount = FALSE)
+clrdata2 <- ClrTransform(TaxaTable = feature_table_gen, pseudocount = TRUE)
+clrdata1[1:3,1:5]
+clrdata2[1:3,1:5]
+```
+
+
+## Exercise 4: DA analysis with ALDEx2
+Run DA analysis from package "ALDEx".
+Run ALDEx2 
+- choosing the right input data and format (e.g. raw, normalized, clr-transformed or other? matrix or transposed matrix?)
+- setting the number of Monte Carlo simulations equal to 200
+- setting the Welch's t and Wilcoxon tests
+```{r message = FALSE}
+
+library(ALDEx2)
+
+x <- aldex(feature_table_gen, conditions = label_samples$DiseaseState, test = "t", mc.samples = 200)
+
+
+```
+
+
+##Exercise 5: visualization of DA taxa
+- Select the taxa that are differentially abundant (DA) according to ALDEx2 test (use results from exercise 4). Select ALDEx2 DA taxa based on the Wilcoxon test and BH correction for multiple testing, using a significance level alpha = 0.05.
+- Take the clr-transformed (without pseudocount) data matrix obtained using function from exercise 3 (i.e. clrdata1). Filter it to keep only DA taxa (i.e. keep only rows corresponding to DA taxa).
+- Run t-SNE (perplexity=5) on such filtered matrix, drawing a t-SNE plot showing CDI infected patients and Healthy subjects with different colors.
+- Run UMAP (k=5) on such filtered matrix, drawing a UMAP plot showing CDI infected patients and Healthy subjects with different colors.
+```{r message = FALSE}
+
+de <- x$wi.eBH < 0.05
+filt <- clrdata1[de,]
+
+tsne(filt, labels = label_samples$DiseaseState, perplex = 5)
+
+res_umap_filt <- umap(t(filt), n_neighbors = 5)
+cols_filt <- ifelse(label_samples$DiseaseState == "H", "red", "blue")
+plot(res_umap_filt$layout[,1], res_umap_filt$layout[,2], col = cols)
+
+```
+Do you see any trend? What are your comment on the DA analysis and the above plots? 
+< WRITE HERE YOUR COMMENT >
+
+

@@ -1,0 +1,602 @@
+---
+title: 'Single-cell RNA sequencing analysis'
+author: "Giulia Cesaro"
+output:
+html_document:
+df_print: paged
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+# **Load dataset: SingleCellExperiment**
+
+The *"SingleCellExperiment" (SCE)* stores single-cell genomics data.
+
+-Each row of this matrix corresponds to a gene
+-Each column corresponds to a cell.
+Used in Bioconductor single-cell packages like scater and scran.
+Different parts of the *SCE* object can be access by specific function functions.
+
+```{r}
+library(SingleCellExperiment)
+load("sce_lab.RData")                       #(our file)
+sce                                         #The sce is the single cell experiment object, created by the loading
+```
+
+### **ASSAY**
+
+The assay contains the primary data, i.e. matrix of sequencing counts for now
+Assay "counts" contains the raw count data, i.e. number of reads/transcripts for a particular gene.
+```{r}
+# to retrieve all the available assays 
+assays(sce)                   #Shows the primary data, in this case there is only "counts"
+
+# access the count data
+class(counts(sce))           #The class of the MATRIX count is ofc a matrix
+```
+
+The counts themselves are loaded as a sparse matrix (rows correspond to features (genes) and columns correspond to samples (cells))
+Access the element as a matrix object
+```{r}
+counts(sce)[1:5,1:5] #Show the first 5 rows and 5 cols of the counts matrix
+```
+
+Let's check the level of *sparsity*, i.e. the *percentage of zero count values*
+
+```{r}
+(1 - (length(counts(sce)@x)/(ncol(sce)*nrow(sce))))*100
+
+#80% of the values are zero!!!
+```
+
+##*GET INFORMATION*
+
+### INFORMATION ABOUT THE CELLS (coumns)
+Information about the cells is stored in the colData slot of the sca, a DataFrame object where rows correspond to cells and columns correspond to metadata fields, e.g., batch of origin, treatment condition.
+
+```{r}
+# access cell metadata
+colData(sce)
+
+#make sure that the rows of your colData actually refer to the same cells as the columns of your count matrix.
+```
+
+### INFORMATION ABOUT THE GENES (rows)
+
+Information about the genes is stored in the rowData slot of the sca, a DataFrame where each row corresponds to a gene and contains annotations like the transcript length or gene symbol.
+
+```{r}
+# access gene metadata
+rowData(sce)
+```
+
+### ADDITIONAL INFORMATION (metadata)
+
+Some analyses contain results or annotations that do not fit into the aforementioned slots, e.g., study metadata.
+This can be stored in the metadata slot, a named list of arbitrary objects.
+
+```{r}
+metadata(sce)$lab <- "lab_single_cell" #we are inserting a new field in the metadata section
+
+# access gene metadata
+metadata(sce)                         #When we show the metadata we access also our new field
+```
+
+# *Filtering poor quality cells (empty droplets)*
+
+First find droplets with dead cells inside
+We use the barcode rank plot, which shows the (log-)total UMI count for each barcode (cell) on the y-axis and the (log-)rank on the x-axis.
+It allows users to examine the distribution of total counts across barcodes, focusing on those with the largest counts.
+
+The `barcodeRanks` (bcrank) function can be used to rank the barcodes (cells) by number of UMIs and to estimate the knee and inflection point of the distribution.
+
+```{r}
+library(DropletUtils)
+bcrank <- barcodeRanks(counts(sce))
+
+# Only showing unique points for plotting speed.
+uniq <- !duplicated(bcrank$rank)
+plot(bcrank$rank[uniq], bcrank$total[uniq], log="xy",xlab="Rank", ylab="Total UMI count", cex.lab=1.2)
+
+abline(h=metadata(bcrank)$inflection, col="darkgreen", lty=2)   #Shows the line at the height of the two metadata
+abline(h=metadata(bcrank)$knee, col="dodgerblue", lty=2)
+
+legend("bottomleft", legend=c("Inflection", "Knee"),
+       col=c("darkgreen", "dodgerblue"), lty=2, cex=1.2)
+```
+
+The *knee* (blue) and *inflection* (green) points on the curve represent the difference between empty droplets with little RNA and cell-containing droplets with much more RNA --> THERE ARE FEW EMPTY DROPLETS (GOOD)
+
+
+# *Filtering poor quality cells (Mitochondrial DNA)*
+
+It maybe be correct to discard droplets with damaged/stressed cells (High mitochondrial DNA = stressed/dyng)
+-We remove cells with high percentages of mitochondrial reads.
+
+The `perCellQCMetrics` function computes a set of metrics useful to evaluate the quality of the samples, e.g. the sum of counts.
+We are computing the proportion of counts mapping to mitochondrial genes... how? we look for "mt-" in teh names of the columns
+
+```{r}
+library(scuttle)
+library(scater)
+is.mito <- grep("mt-", rownames(sce))                          #Mt means that we're looking for counts that map to mitochondrial genes
+per.cell <- perCellQCMetrics(sce, subsets=list(Mito=is.mito))
+summary(per.cell$sum)                                         #We show the sum of counts
+```
+
+The `isOutlier` function finds cells of lower quality compared to the rest of the dataset
+
+```{r}
+high.mito <- isOutlier(per.cell$subsets_Mito_percent, type="higher")
+table(high.mito)
+
+#9052 outliears
+```
+
+We insert in the colData of SCE the information perCellQCMetrix. (Coldata is a component of sce)
+
+```{r}
+colData(sce) <- cbind(colData(sce), per.cell)
+colnames(colData(sce))
+```
+
+# *Filtering low expression genes*
+
+The sce object is only the high-quality cells now
+We want to filter out genes that are likely to bring noise
+
+In fact, many of the genes that we stored in the object have no UMI in any cell (counts are zero)
+
+```{r}
+allzero <- rowMeans(counts(sce)==0)==1 #The ones without UMI
+table(allzero)
+```
+
+Similarly to data.frame, matrix objects, we can use the [ operator to subset our SCE either by *rows* (genes) or *columns* (cells).
+
+```{r}
+# remove them
+sce <- sce[which(!allzero),]  #Remove the allzero locations
+sce                           #print the updated sce
+```
+
+#**Normalization: scran**
+
+We use the scran method to normalize the data for differences in sequencing depth.
+```{r}
+library(scran)
+# perform a quick clustering, necessary for scran normalization 
+cl <- quickCluster(sce) 
+#returns a SingleCellExperiment object with the estimated size factors stored in the colData.
+sce <- computeSumFactors(sce, clusters=cl) #sce based on the quick clustering (cell- specific bias).. not really normalized yet
+
+colData(sce)
+```
+
+RATIONAL: Briefly, a pool of cells (resulting from quick clustering) is selected and the expression profiles for those cells are summed together.
+The pooled expression profile is normalized against an average reference pseudo-cell, constructed by averaging the counts across all cells.
+This defines a size factor for the pool as the median ratio between the count sums and the average across all genes.
+The size factor of the pool can be written as a linear equation of the size factors for the cells and it is deconvoluted to obtain cell-based size factors.
+
+To actually normalize the data, we can use the `logNormCounts` function that will use the size factors stored in the object to normalize the data and save the log-normalized counts as a second assay in the object.
+
+```{r}
+#Now actualy normalize
+sce <- logNormCounts(sce) #perform normalization + store normalized counts in logcounts assay
+gc()
+
+assays(sce)
+```
+
+Access the log normalized data
+```{r}
+logcounts(sce)[1:5, 1:5]
+```
+
+We can check that the estimated library sizes are not too far from the library size factors, estimated from the total number of counts.
+
+```{r}
+plot(librarySizeFactors(sce),sizeFactors(sce), xlab="Library size factors", ylab="Deconvolution size factors", log="xy", col=as.integer(factor(cl))); abline(a=0,b=1,col="red")
+```
+
+# *Highly variable genes (HVGs) Highest variable genes*
+
+High variable genes are the genes in which we are most interest in ... they are carrying biologically relevant information, they vary between cells.
+The simplest approach to quantifying per-gene variation is to compute the variance of the log-normalized expression values for each gene across all cells
+
+The idea is to decompose the total variance of each gene into its **biological** and **technical** components.
+The `modelGeneVar` fit a mean-dependent trend to the variances of the log-normalized expression values.
+
+The fitted value of the trend is used as an estimate of the technical component, and we subtract the fitted value from the total variance to obtain the biological component for each gene. (technical is human error while biological is true)
+
+```{r}
+set.seed(1001)
+dec <- modelGeneVar(sce)
+head(dec)
+```
+MOST GENES DON'T EXPRESS BIOLOGICAL VARIABILITY
+
+```{r}
+plot(dec$mean, dec$total, pch=16, cex=0.5, xlab="Mean of log-expression", ylab="Variance of log-expression")
+curfit <- metadata(dec)
+curve(curfit$trend(x), col='dodgerblue', add=TRUE, lwd=2)
+```
+
+The `modelGeneVar` function tests the null hypothesis that the biological component of the variance is 0 for each gene: small p-values indicate a gene with evidence of biological variation, we don't want H0, we want variable genes
+
+We can select the genes using a threshold on the adjusted p-values or simply ranking them by biological variation and selecting the top 1000.
+We can then extract some top genes for use in downstream procedures using the `getTopHVGs` function.
+
+```{r}
+top.HVG <- getTopHVGs(dec, n=1000) #Top 1000
+head(top.HVG)
+
+#save in metadata
+metadata(sce)$HVG <- top.HVG 
+```
+
+
+
+
+# **Dimensionality reduction: PCA, tSNE and UMAP**
+
+## PCA
+
+We perform principal component analysis (PCA) using the runPCA function.
+-Data normalized by scran
+-Using only the selected HVGs (using `subset_row` argument) for a better representation of our biological signal.
+
+```{r}
+sce <- runPCA(sce, subset_row=top.HVG)
+plotPCA(sce)
+```
+
+By default `runPCA` will store the PCs in the `PCA` slot of the sce obj. it's possible to specify a different slot name, via the `name` argument.
+
+```{r}
+sce #Now we see that there is a reducedDimNames slot caused by the runPCA, not present before
+```
+
+```{r}
+head(reducedDim(sce, "PCA"))  #let's see this new slot
+```
+
+By default `scater` will compute the top 50 PCs.
+Reasonable choice, but it may be a good idea to explore the variance explained by each component to decide the number of components to retain.
+
+```{r}
+cumsum(attr(reducedDim(sce, "PCA"), which = "percentVar"))
+```
+
+One problem of PCA is that it assumes continuous, roughly Gaussian data.
+There are alternatives that use directly the count data (no normalization or log-transformation):
+
+## t-SNE (alternative to pca)
+
+**T-distributed** stochastic neighbour embedding (𝑡-SNE) is widely used for visualizing complex single-cell data sets.
+
+```{r}
+sce <- runTSNE(sce, subset_row = top.HVG)
+plotTSNE(sce)
+```
+
+```{r}
+sce                 #Now in the rducedDimNames there is PCA and TSNE..... they are both in there at the same time
+```
+
+```{r}
+head(reducedDim(sce, "TSNE"))
+```
+
+Perplexity is perhaps the most important parameter in t-SNE and can reveal different aspects of the data.
+Considered loosely, it can be thought of as the **balance between preserving the global (high values) and the local structure (low values) of the data**.
+
+The perplexity values range suggested by van der Maaten & Hinton is (5 - 50)
+
+```{r}
+sce <- runTSNE(sce, subset_row = top.HVG, perplexity=10)
+plotTSNE(sce)
+```
+
+```{r}
+sce <- runTSNE(sce, subset_row = top.HVG, perplexity=50)
+plotTSNE(sce)
+```
+
+The same can be done for uniform manifold with approximate projection (UMAP) via the `runUMAP`() function.
+
+```{r}
+sce <- runUMAP(sce, subset_row = top.HVG)
+plotUMAP(sce)
+```
+
+Similarly, the most important parameter is `n_neighbors` - the number of approximate nearest neighbors used to construct the initial high-dimensional graph (default 15).
+It effectively controls how UMAP balances local versus global structure - low values will push UMAP to focus more on local structure by constraining the number of neighboring points considered when analyzing the data in high dimensions, while high values will push UMAP towards representing the big-picture structure while losing fine detail.
+
+```{r}
+sce <- runUMAP(sce, subset_row = top.HVG, n_neighbors = 3)
+plotUMAP(sce)
+```
+
+# *Doublets identification (in this case we want to remove them)*
+A single droplet may erroneously capture more than one cell; these are called *doublets*
+
+The function `computeDoubletDensity` identifies potential doublet cells based on the local density of simulated doublet expression profiles.
+We can define a threshold to identify putative doublets.
+
+The strategy employed is: (discussed in previous theory lectures)
+-   We simulate many artificial doublets by summing two random cells.
+-   We compute the density of the simulated cells in the neighborhood of each real cell.
+-   We compute the density of real cells in the neighborhood of each cell.
+-   We compute the ratio between the two densities to obtain a cell-specific "doublet score".
+
+```{r}
+library(scDblFinder)
+scores <- computeDoubletDensity(sce)
+sce$DoubletScore <- scores                                 #Add the score sto the sce
+dbl.calls <- doubletThresholding(data.frame(score=scores), method="griffiths", returnType="call")
+summary(dbl.calls)
+```
+
+Visualize the identified doublet in a tSNE plot.
+
+```{r}
+sce$doublets <- factor(dbl.calls)
+plotTSNE(sce, colour_by="doublets")
+```
+
+Now eliminate them from the dataset.
+
+```{r}
+sce <- sce[, dbl.calls == "singlet"] #Select only the cols that are singlet (not doublets)
+sce                                  #Show the updated sce
+```
+
+# **Clustering: Louvain algorithm**
+
+This method starts from a cell network (graph), created by connecting cells that have shared nearest neighbors.
+
+Typically, clustering is done on a low dimensional projection of the data, e.g., through PCA.
+
+The first step is the creation of the *shared nearest neighbor graph*, i.e. a graph by linking cells that have neighbors in common.
+This is implemented in the `buildSNNgraph` function of the `scran` package; by default it uses `k=10` neighbors.
+
+```{r}
+library(igraph)
+g <- buildSNNGraph(sce, k=10, use.dimred = 'PCA')
+```
+
+Then, we can use the `igraph` package to identify communities (clusters) in the graph by using the Louvain algorithm.
+
+```{r}
+clust <- igraph::cluster_louvain(g)
+```
+
+Finally, we store the results into the `colData` of our object and visualize the clusters in the t-SNE plot.
+
+```{r}
+sce$Louvain <- factor(membership(clust))        #Add Louvian field to sce
+plotTSNE(sce, colour_by="Louvain")
+```
+
+
+
+
+# **Cell type annotation**
+
+We want to understand which are the cell types.
+
+### IDENTIFICATION OF MARKER GENES
+
+One approach is to look for marker genes to label the clusters, i.e. differential expression analysis between clusters (comparing the average expression of one group versus the average of the others)
+
+```{r}
+markers <- findMarkers(sce, sce$Louvain)
+head(markers[[1]])
+```
+
+Extract the top 10 genes (ranked by pvalues) for each comparison to use as cluster-specific markers.
+
+```{r}
+mm <- unique(unlist(lapply(markers, function(x) rownames(x)[1:5])))
+plotGroupedHeatmap(sce, features=mm, group="Louvain", center=TRUE)
+```
+
+For example, Rgs5 and Fabp4 are marker genes for , respectively, Smooth muscle cell and Endothelial cell in previous studies (<https://www.nature.com/articles/s41597-023-02333-6>).
+
+```{r}
+plotTSNE(sce, colour_by = "Rgs5")
+```
+
+```{r}
+plotTSNE(sce, colour_by = "Fabp4")
+```
+
+By cross-checking the expression of these genes with databases of known cell type markers, we may be able to annotate the clusters in cell types.
+
+
+### AUTOMATIC ANNOTATION
+
+SingleR is an automatic annotation method for single-cell RNA sequencing data.
+
+Given a reference dataset of samples (single-cell or bulk, we have that as the other file) with known labels, it labels new cells from a test dataset based on similarity to the reference
+Doing this we don't have to annotate clusters manually
+
+RATIONAL: for each test cell, it computes the Spearman correlation between its expression profile and that of each reference sample.
+This is done only for marker genes.
+Then, define the per-label score as 0.8 quantile of the correlation across all samples with that label.
+The label with the highest score is used as SingleR's prediction for this cell.
+
+```{r}
+load("ref.RData")
+
+ref
+table(colData(ref)@listData$cell_ontology_class)
+```
+
+To select the genes of interest in the reference dataset, we will perform pairwise Wilcoxon rank sum tests between labels (`de.method = "wilcoxon"`).
+By default, the function will take the top de.n (default: 10) genes from each pairwise comparison between labels.
+
+
+
+
+
+#########From now on it doesn't work
+
+
+```{r}
+library(SingleR)
+pred <- SingleR(test=sce, ref=ref, labels=ref$cell_ontology_class, 
+                de.method = "wilcox", assay.type.ref = "counts")
+table(pred$labels)
+```
+
+The method returns a continuous score, which represents how similar each cell is to the annotated cell populations in the reference.
+Moreover, it returns the final prediction in the form of a cell-type label.
+
+```{r}
+plotScoreHeatmap(pred)
+```
+
+We can include the predictions in the `SingleCellExperiment` object and visualize the results.
+
+```{r}
+sce$singler <- factor(pred$labels)
+plotTSNE(sce, colour_by = "singler")
+```
+
+We can compare the Louvain clusters with the predicted cell types.
+
+```{r}
+tab <- table(cluster=sce$Louvain, label=pred$labels) 
+pheatmap::pheatmap(log10(tab+10)) # using a larger pseudo-count for smoothing. 
+```
+
+The default philosophy of SingleR is to perform annotation of each individual cell in the test dataset.
+An alternative strategy is to perform annotation of aggregated profiles for groups or clusters of cells.
+
+By passing `clusters=` to `SingleR()`, we direct the function to compute an aggregated profile per cluster.
+
+```{r}
+library(SingleR)
+pred <- SingleR(test=sce, ref=ref, labels=ref$cell_ontology_class, de.method = "wilcox", assay.type.ref = "counts", clusters = sce$Louvain )
+table(pred$labels)
+
+sce$singlercl <- factor(pred$labels[sce$Louvain])
+plotTSNE(sce, colour_by = "singlercl")
+```
+
+This approach assumes that each cluster in the test dataset corresponds to exactly one reference label.
+
+We use the `plotScoreHeatmap()`function to visualize the score matrix
+
+```{r}
+plotScoreHeatmap(pred)
+```
+
+The choice of reference has a major impact on the annotation results.
+We need to pick a reference that contains a superset of the labels that we expect to be present in our test dataset.
+
+# Cell-cell communication (CCC)
+
+CCC inference from single-cell data is now becoming a routine approach.
+
+As a result of this increased interest, a number of computational tools for CCC inference from single-cell transcriptomics have emerged that can be classified as those that predict CCC interactions alone, commonly referred to as ligand-receptor inference methods, and those that additionally estimate intracellular activities induced by CCC.
+We will see scSeqComm tool.
+
+The main inputs of any cell-cell communication inference tool are: a scRNA-seq datasets with cell-type annotation and a priori biological knowledge.
+
+Gene expression information: scSeqComm requires a normalizad gene expression matrix ("dgCMatrix" object) and a data.frame containing the results of cell type annotation.
+
+```{r}
+gene_expr <- SingleCellExperiment::logcounts(sce)
+metadata <- SingleCellExperiment::colData(sce)
+cell_metadata <- data.frame(Cell_ID = row.names(metadata), 
+                            Cluster_ID = metadata$singlercl)
+
+```
+
+Intercellular signaling and intracellular signaling inference are based on a priori biological knowledge on ligand-receptor pairs, signaling pathway and transcriptional regulatory network (transcription factors and target genes)
+
+```{r}
+LRdb <- scSeqComm::LR_pairs_Shao_2020_mouse
+kegg <- scSeqComm::TF_PPR_KEGG_mouse
+tftg <- scSeqComm::TF_TG_Dorothea_mouse
+#if (!require("BiocManager", quietly = TRUE))
+ #   install.packages("scSeqComm")
+
+#BiocManager::install("scSeqComm")
+```
+
+The function [`scSeqComm_analyze()`](https://sysbiobig.gitlab.io/scSeqComm/reference/scSeqComm_analyze.html) performs the identification and quantification of ongoing intercellular and/or intracellular signaling from user specified inputs.
+
+```{r}
+
+resCCC <- scSeqComm::scSeqComm_analyze(gene_expr = gene_expr,
+                                       cell_metadata = cell_metadata,
+                                       LR_pairs_DB = LRdb,
+                                       TF_reg_DB = tftg,
+                                       R_TF_association = kegg,
+                                       N_cores = 4)
+
+resCCC <- resCCC$comm_results[, c("ligand","receptor", "LR_pair","cluster_L", "interaction", "cluster_R","S_inter","pathway","S_intra","genes")]
+```
+
+An ongoing cellular communication occurs through a ligand and a receptor and the two clusters expressing them.
+Each ligand-receptor pair and cell cluster couple is uniquely characterized by a **S_inter** score, which quantifies the intercellular signaling evidence.
+
+A cellular communication can trigger different cellular responses in the receiving cell through different pathways: thus, to a ligand-receptor pair and cell cluster pair can be associated to multiple S_intra scores, i.e. evidence of an ongoing intracellular signaling.
+
+```{r}
+#summarize S_intra score
+inter_max_intra_scores <- scSeqComm_summaryze_S_intra(resCCC)
+
+# select communication with s_inter > 0.9
+selected_comm <- scSeqComm_select(inter_max_intra_scores, 
+                                  S_inter = 0.9, S_intra = 0.9)
+
+# interactive chord diagram and heatmap
+scSeqComm_chorddiag_cardinality(data = selected_comm)
+
+scSeqComm_heatmap_cardinality(data = selected_comm, 
+                              title = "Ongoing cellular communication (inter- and intra-cellular evidence)")
+
+```
+
+We can functionally characterize cellular communication in the receiver cells, through the function [scSeqComm_GO_analysis(](https://sysbiobig.gitlab.io/scSeqComm/reference/scSeqComm_GO_analysis.html)), which perform Gene Ontology enrichment analysis on target genes downstream.
+
+```{r}
+# select communication 
+selected_comm <- scSeqComm_select(resCCC, 
+                                  S_inter = 0.9,
+                                  S_intra = 0.9,
+                                  cluster_R = "fibroblast",
+                                  cluster_L = "smooth muscle cell",
+                                  NA_included = F,
+                                  receptor = c("Fas", "Egfr"))
+
+
+```
+
+```{r}
+functional_response <- scSeqComm_GO_analysis(results_signaling = selected_comm , 
+                                             geneUniverse = NULL,
+                                             method = "specific",
+                                             package = "clusterProfiler",
+                                             OrgDb = "org.Mm.eg.db")
+
+```
+
+```{r}
+barplot(functional_response$Egfr)
+```
+
+```{r}
+barplot(functional_response$Fas)
+```
